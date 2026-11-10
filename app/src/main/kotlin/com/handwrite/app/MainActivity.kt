@@ -209,6 +209,16 @@ class MainActivity : Activity() {
         lp.setMargins(Ui.dp(this, 14f), Ui.dp(this, 0f), Ui.dp(this, 14f), Ui.dp(this, 10f))
         card.layoutParams = lp
 
+        val hint = Ui.text(
+            this,
+            "Это пример настоящего шрифта. Чтобы писать своим почерком, откройте «Мой почерк» → " +
+                "«Лист-шаблон» и сфотографируйте заполненный лист.",
+            12.5f, Ui.TEXT2
+        )
+        hint.visibility = View.GONE
+        card.addView(hint)
+        emptyHint = hint
+
         preview = PageView(this)
         val ph = resources.displayMetrics.heightPixels * 0.44f
         card.addView(preview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ph.toInt()))
@@ -572,6 +582,8 @@ class MainActivity : Activity() {
      */
     private val unsureQueue = ArrayList<GlyphAtlas.Sample>()
 
+    private var emptyHint: TextView? = null
+
     private var learningStateProgress: LinearLayout? = null
     private var learningStateBar: ProgressBar? = null
     private var learningStateStatus: TextView? = null
@@ -834,7 +846,8 @@ class MainActivity : Activity() {
     }
 
     private fun refreshAtlasBadge() {
-        // the font chips are rebuilt from scratch, so this is enough
+        // the badge is part of the header text, which is rebuilt by the tab switcher
+        emptyHint?.visibility = if (atlas == null) View.VISIBLE else View.GONE
     }
 
     /**
