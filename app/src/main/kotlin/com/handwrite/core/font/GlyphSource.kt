@@ -38,6 +38,13 @@ interface GlyphSource {
      */
     val usesEvenOddFill: Boolean get() = false
 
+    /**
+     * Where the pen enters and leaves a glyph, in font units (y up, baseline at 0), or null when
+     * the source cannot tell. Used to continue the real stroke between letters instead of drawing
+     * a generic tick - see [com.handwrite.core.handwriting.StrokeFlow].
+     */
+    fun strokeFlow(gid: Int): StrokeFlow? = null
+
     /** Can the glyph be used as a connector start/end (a letter, not punctuation)? */
     fun isLetterGlyph(cp: Int, gid: Int): Boolean
 }

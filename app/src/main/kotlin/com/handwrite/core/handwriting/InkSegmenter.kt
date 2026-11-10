@@ -52,28 +52,51 @@ object InkSegmenter {
      * @param template true when the photo is a grid/column template sheet: crops are then split
      *        by the whitespace between cells instead of being grouped into text lines
      */
-    fun segment(gray: FloatArray, width: Int, height: Int, template: Boolean = false): Page {
-        val normalised = normaliseBackground(gray, width, height)
+    fun segment(
+        gray: FloatArray,
+        width: Int,
+        height: Int,
+        template: Boolean = false,
+        preMask: FloatArray? = null
+    ): Page {
+        val normalised = when {
+            preMask != null -> normaliseMask(preMask, width, height)
+            else -> normaliseBackground(gray, width, height)
+        }
         val thr = otsu(normalised)
         val bin = BooleanArray(width * height)
-        for (i in bin.indices) bin[i] = normalised[i] > thr
+        if (preMask != null) {
+            // The colour mask already says what is ink and what is grid, so the threshold must
+            // follow it instead of Otsu: on a squared page the grid is half of the "dark" pixels
+            // and Otsu happily lands in the middle of the pen strokes.
+            val strong = max(0.35f, InkMask.percentile(preMask, 0.98f) * 0.45f)
+            for (i in bin.indices) bin[i] = preMask[i] > strong
+        } else {
+            for (i in bin.indices) bin[i] = normalised[i] > thr
+        }
         removeLongLines(bin, width, height)
         despeckle(bin, width, height, minArea = max(6, width * height / 400000))
         val comps = connectedComponents(bin, width, height)
         val lineHeight = estimateLineHeight(comps, height)
         // merge dots/accents with their base letter
         val merged = mergeSmallComponents(comps, lineHeight)
+        val glued = if (preMask != null) glueStrokes(merged, lineHeight) else merged
         var boxes = ArrayList<Box>()
-        for (g in merged) {
+        for (g in glued) {
             if (g.w < 2 || g.h < 2) continue
             if (g.w * g.h < 12) continue
             // on a template sheet every letter sits in its own cell: splitting by the projection
             // profile would cut multi-stroke letters (ж, ш, ы) in half, so parts are only glued
-            if (template) boxes.add(g) else boxes.addAll(splitTouching(g, bin, width, lineHeight))
+            // On a colour mask letters are separated by their own outlines, so the projection split
+            // only cuts them at their internal valleys ("ш" -> three sticks, "и" -> two). It is kept
+            // for the grayscale path, where adjacent letters really do fuse together.
+            if (template || preMask != null) boxes.add(g) else boxes.addAll(splitTouching(g, bin, width, lineHeight))
         }
         if (template) boxes = glueCellParts(boxes, normalised, width, height)
         val crops = ArrayList<Crop>()
+        val crumb = lineHeight * 0.16f      // dots and specks carry no letter shape
         for (p in boxes) {
+            if (preMask != null && p.w < crumb && p.h < crumb) continue
             val tile = cropTile(normalised, width, height, p)
             if (TileRasterizer.isEmpty(tile)) continue
             crops.add(Crop(p.x, p.y, p.w, p.h, tile, p.count))
@@ -230,6 +253,22 @@ object InkSegmenter {
         val h get() = y1 - y0 + 1
         val area get() = w * h
         fun merge(o: Box): Box = Box(min(x0, o.x0), min(y0, o.y0), max(x1, o.x1), max(y1, o.y1), count + o.count)
+    }
+
+    /**
+     * Turns a 0..1 ink map (see [InkMask]) into the "ink likelihood" the rest of the pipeline
+     * expects: local contrast against the paper is added so that faint strokes still pass Otsu,
+     * while the grid - which has no colour contrast and is soft and thin - stays below it.
+     */
+    private fun normaliseMask(mask: FloatArray, width: Int, height: Int): FloatArray {
+        val local = InkMask.boxMean(mask, width, height, max(width, height) / 24)
+        val out = FloatArray(mask.size)
+        for (i in out.indices) {
+            val v = mask[i]
+            // unsharp: a pen stroke is much stronger than its neighbourhood; a grid line is not
+            out[i] = (v + max(0f, v - local[i])).coerceIn(0f, 1f)
+        }
+        return out
     }
 
     private fun normaliseBackground(gray: FloatArray, width: Int, height: Int): FloatArray {
@@ -423,6 +462,54 @@ object InkSegmenter {
      * i/j dots, umlauts and accents are separate blobs that belong to the letter below them.
      * A small blob is absorbed by the letter whose horizontal span it overlaps.
      */
+    /**
+     * Joins pieces that belong to one letter.
+     *
+     * On a colour mask a pen stroke can break where it crosses a grid line, and the two halves of
+     * "ш" or "т" then travel as separate crops. Real letter boundaries have a visible white gap, so
+     * anything closer than ~0.12 of the line height (and overlapping vertically) is the same letter.
+     * Extra guard: capitals and tall letters must not swallow their neighbours, so the union is
+     * limited in width.
+     */
+    private fun glueStrokes(boxes: List<Box>, lineHeight: Float): List<Box> {
+        if (boxes.size < 2) return boxes
+        val sorted = boxes.sortedByDescending { it.area }
+        val used = BooleanArray(sorted.size)
+        val out = ArrayList<Box>()
+        val limit = max(2f, lineHeight * 0.10f)
+        // only fragments are glued (a dot, a broken tail). Two letter-sized pieces are left apart:
+        // letters that really touch are cut by splitTouching, which follows the ink profile instead
+        // of the bounding boxes.
+        val fragment = lineHeight * 0.55f
+        for (i in sorted.indices) {
+            if (used[i]) continue
+            var box = sorted[i]
+            used[i] = true
+            var changed = true
+            while (changed) {
+                changed = false
+                for (j in sorted.indices) {
+                    if (used[j]) continue
+                    val o = sorted[j]
+                    val oSmall = o.w < fragment || o.h < fragment
+                    val bSmall = box.w < fragment || box.h < fragment
+                    if (!oSmall && !bSmall) continue
+                    val gapX = max(0, max(box.x0, o.x0) - min(box.x1, o.x1))
+                    val gapY = max(0, max(box.y0, o.y0) - min(box.y1, o.y1))
+                    if (gapX > limit || gapY > limit) continue
+                    val unionW = max(box.x1, o.x1) - min(box.x0, o.x0)
+                    val unionH = max(box.y1, o.y1) - min(box.y0, o.y0)
+                    if (unionW > lineHeight * 0.9f || unionH > lineHeight * 2.0f) continue
+                    box = box.merge(o)
+                    used[j] = true
+                    changed = true
+                }
+            }
+            out.add(box)
+        }
+        return out
+    }
+
     private fun mergeSmallComponents(comps: List<Box>, lineHeight: Float): List<Box> {
         val smallLimit = lineHeight * 0.55f
         val sorted = comps.sortedByDescending { it.area }

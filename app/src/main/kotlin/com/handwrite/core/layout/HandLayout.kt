@@ -91,6 +91,7 @@ object HandLayout {
         val leading = metrics.leading
 
         val anchors = HashMap<Int, Anchors>()
+        val flows = HashMap<Int, com.handwrite.core.font.StrokeFlow?>()
         val linesText = buildLines(text, style, source, scale, metrics.marginL, metrics.marginR, size)
         val perPage = max(1, ((metrics.marginB - metrics.marginT) / leading).toInt())
         val pages = ArrayList<LaidOutPage>()
@@ -102,7 +103,7 @@ object HandLayout {
             val placed = ArrayList<PlacedLine>(chunk.size)
             for ((i, ln) in chunk.withIndex()) {
                 val baseline = metrics.baselineOf(i)
-                placed.add(placeLine(ln, lineIdx + i, baseline, style, source, metrics, anchors, text))
+                placed.add(placeLine(ln, lineIdx + i, baseline, style, source, metrics, anchors, flows, text))
             }
             pages.add(LaidOutPage(pageIdx, pageW, pageH, placed, useFontGlyphs))
             lineIdx += chunk.size
@@ -240,6 +241,7 @@ object HandLayout {
         source: GlyphSource,
         metrics: PageMetrics,
         anchors: HashMap<Int, Anchors>,
+        flows: HashMap<Int, com.handwrite.core.font.StrokeFlow?>,
         sourceText: String
     ): PlacedLine {
         val size = style.sizePt
@@ -303,7 +305,10 @@ object HandLayout {
                 )
                 glyphs.add(placed)
 
-                val current = if (cp != 0) LetterRef(cp, placed, anchorsOf(gid, path, anchors), pressureHere) else null
+                val current = if (cp != 0) {
+                    val flow = if (joinedByFont) null else flows[gid] ?: source.strokeFlow(gid).also { flows[gid] = it }
+                    LetterRef(cp, placed, anchorsOf(gid, path, anchors), pressureHere, flow)
+                } else null
                 if (style.connectLetters && !joinedByFont && current != null && prev != null && !isLast) {
                     addConnector(connectors, prev, current, style, size, rnd, scale)
                 }
@@ -333,7 +338,9 @@ object HandLayout {
         val cp: Int,
         val placed: PlacedGlyph,
         val anchors: Anchors,
-        val pressure: Float
+        val pressure: Float,
+        /** real pen entry/exit when the source can tell (learned letters), see StrokeFlow */
+        val flow: com.handwrite.core.font.StrokeFlow? = null
     )
 
     /**
@@ -423,49 +430,88 @@ object HandLayout {
         scale: Float
     ) {
         if (!Character.isLetter(prev.cp) || !Character.isLetter(next.cp)) return
-        // a hand lifts the pen after an upper-case letter (прописные пишутся отдельно)
+        // the pen lifts after a capital letter: прописные пишутся отдельно
         if (Character.isUpperCase(prev.cp) || Character.isUpperCase(next.cp)) return
+
         val pm = prev.placed.transform
         val nm = next.placed.transform
-        val exitX = pm.applyX(prev.anchors.exitX, prev.anchors.exitY)
-        val exitY = pm.applyY(prev.anchors.exitX, prev.anchors.exitY)
-        val entryX = nm.applyX(next.anchors.entryX, next.anchors.entryY)
-        val entryY = nm.applyY(next.anchors.entryX, next.anchors.entryY)
-        // where the pen actually is when it leaves one letter and lands on the next one
-        var x0 = exitX
-        var x1 = entryX
-        var y0 = exitY
-        var y1 = entryY
-        if (x1 - x0 < size * 0.02f) {
-            // glyphs overlap (typical for tightly kerned cursive): join across the advance box
-            x0 = pm.applyX(prev.placed.advance / scale * 0.90f, 0f)
-            x1 = nm.applyX(next.placed.advance / scale * 0.10f, 0f)
-            y0 = kotlin.math.min(y0, pm.applyY(0f, 0f))
-            y1 = kotlin.math.min(y1, nm.applyY(0f, 0f))
+        val pen = size * 0.055f
+
+        // ---- where the pen leaves and where it must arrive (page space) ----
+        val fromFlow = prev.flow?.exit
+        val toFlow = next.flow?.entry
+        val exitX: Float
+        val exitY: Float
+        val entryX: Float
+        val entryY: Float
+        // directions of the original strokes at those points (page space, y down)
+        var outDx: Float
+        var outDy: Float
+        var inDx: Float
+        var inDy: Float
+        val baselineY = prev.placed.baselineY
+
+        if (fromFlow != null && toFlow != null) {
+            exitX = pm.applyX(fromFlow.x, fromFlow.y)
+            exitY = pm.applyY(fromFlow.x, fromFlow.y)
+            entryX = nm.applyX(toFlow.x, toFlow.y)
+            entryY = nm.applyY(toFlow.x, toFlow.y)
+            // font space is y up; the page is y down, and the glyph is also flipped by the transform
+            outDx = pm.applyX(fromFlow.dx, 0f) - pm.applyX(0f, 0f)
+            outDy = pm.applyY(0f, fromFlow.dy) - pm.applyY(0f, 0f)
+            inDx = nm.applyX(toFlow.dx, 0f) - nm.applyX(0f, 0f)
+            inDy = nm.applyY(0f, toFlow.dy) - nm.applyY(0f, 0f)
+        } else {
+            // bundled font: fall back to the geometry anchors (extreme points near the baseline)
+            exitX = pm.applyX(prev.anchors.exitX, prev.anchors.exitY)
+            exitY = pm.applyY(prev.anchors.exitX, prev.anchors.exitY)
+            entryX = nm.applyX(next.anchors.entryX, next.anchors.entryY)
+            entryY = nm.applyY(next.anchors.entryX, next.anchors.entryY)
+            outDx = 1f
+            outDy = 0.15f
+            inDx = 1f
+            inDy = 0.15f
         }
-        val dx = x1 - x0
-        if (dx < size * 0.005f) return            // nothing to bridge
-        if (dx > size * 0.85f) return             // too far apart for a natural join
-        if (abs(y1 - y0) > size * 0.35f) return   // different levels: the pen would cross the letter
-        if (dx < size * 0.006f) return            // letters already touch: nothing to draw
-        /*
-         * A cursive join is not a straight line between two letters: the pen comes down to the
-         * baseline, runs along it and rises into the next letter ("подхват"). That dip is what
-         * makes written text readable as handwriting, so the control points are placed slightly
-         * below the baseline of the line rather than on the chord between the anchors.
-         */
-        val baseline = prev.placed.baselineY + size * 0.02f
-        val dip = max(max(y0, y1) + size * 0.04f, baseline)
-        val sag = (rnd.next() - 0.5f) * size * 0.03f
-        val c1x = x0 + dx * 0.30f
-        val c1y = dip + sag
-        val c2x = x0 + dx * 0.72f
-        val c2y = dip + sag
+        val dx = entryX - exitX
+        if (dx > size * 1.1f) return                          // words apart: nothing to join
+        if (abs(entryY - exitY) > size * 0.9f) return         // different lines
+
+        // ---- the curve: leave along the letter's own stroke, dip to the baseline, rise back ----
+        val dirOutLen = max(1e-3f, sqrt(outDx * outDx + outDy * outDy))
+        val dirInLen = max(1e-3f, sqrt(inDx * inDx + inDy * inDy))
+        val handleOut = pen * 2.2f
+        val handleIn = pen * 2.2f
+        // the tangent continues the stroke's movement vector; the sign is chosen so the curve goes
+        // towards the next letter (a stroke that leaves to the left has to curl back)
+        var tOutX = outDx / dirOutLen
+        var tOutY = outDy / dirOutLen
+        if (tOutX * dx + tOutY * 0f < 0f && dx > 0f) { tOutX = -tOutX; tOutY = -tOutY }
+        var tInX = inDx / dirInLen
+        var tInY = inDy / dirInLen
+        if (tInX * dx + tInY * 0f < 0f && dx > 0f) { tInX = -tInX; tInY = -tInY }
+
+        var c1x = exitX + tOutX * handleOut
+        var c1y = exitY + tOutY * handleOut
+        var c2x = entryX - tInX * handleIn
+        var c2y = entryY - tInY * handleIn
+        // keep the join on the paper: a cursive join runs along the baseline, never through the
+        // body of the letters
+        val floor = baselineY + pen * 0.45f
+        val lowest = max(max(c1y, c2y), max(exitY, entryY))
+        if (lowest < floor) {
+            val lift = floor - lowest
+            c1y += lift
+            c2y += lift
+        }
+        val sag = (rnd.next() - 0.5f) * size * 0.012f
+        c1y += sag
+        c2y += sag
+
         val base = size * 0.032f
         val w0 = base * (0.30f + 0.45f * prev.pressure)
         val w1 = base * (0.95f + 0.30f * ((prev.pressure + next.pressure) / 2f))
         val w2 = base * (0.30f + 0.45f * next.pressure)
-        out.add(Connector(x0, y0, c1x, c1y, c2x, c2y, x1, y1, w0, w1, w2, style.inkDensity))
+        out.add(Connector(exitX, exitY, c1x, c1y, c2x, c2y, entryX, entryY, w0, w1, w2, style.inkDensity))
     }
 
     /* ------------------------------------------------------------------ */
