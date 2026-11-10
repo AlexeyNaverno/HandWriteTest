@@ -38,7 +38,26 @@ jobs:
           ls "$SDK/platforms" "$SDK/build-tools"
 
       - name: Build release APK
-        run: gradle --no-daemon assembleRelease --stacktrace
+        run: |
+          set -o pipefail
+          gradle --no-daemon assembleRelease --stacktrace --console=plain 2>&1 | tee build.log
+
+      # Logs of a failed run are not always reachable; annotations are. Put the interesting lines of
+      # the build log into the run summary and into error annotations so a failure is diagnosable
+      # from the API alone.
+      - name: Report build failure
+        if: failure()
+        run: |
+          grep -nE "^(e: |FAILURE|\* What went wrong|Execution failed|Caused by)" -A 8 build.log 2>/dev/null | head -80 || true
+          {
+            echo "### Build log tail"
+            echo '```'
+            tail -60 build.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^e: |What went wrong|Execution failed" build.log 2>/dev/null | head -20 | while IFS= read -r line; do
+            echo "::error title=gradle::$line"
+          done
 
       - name: Run unit tests
         run: gradle --no-daemon test --stacktrace

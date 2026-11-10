@@ -23,6 +23,10 @@ android {
     }
 
     sourceSets {
+        // unit tests live next to the sources they test, in kotlin/, not in java/
+        getByName("test") {
+            java.setSrcDirs(listOf("src/test/kotlin"))
+        }
         getByName("main") {
             // non-standard layout: sources live in app/src/main/kotlin, everything else is default
             java.setSrcDirs(listOf("src/main/kotlin"))
