@@ -713,8 +713,12 @@ class MainActivity : Activity() {
                         val second = gs.getOrNull(1)
                         val margin = if (second == null) 1f else best.score - second.score
                         val emb = HandAssets.embedder(this)?.embed(crop.tile) ?: continue
-                        val unsure = best.score < 0.55f || margin < 0.10f
-                        if (best.score < 0.30f) {
+                        // A wrong label in the atlas is much worse than a missing one: it makes the
+                        // rendered text show the wrong letter, which the user reads as "почерк
+                        // создан с ошибкой". So only confident letters are learned, everything else
+                        // goes to the "Уточнить" review where one tap fixes it.
+                        val unsure = best.score < 0.62f || margin < 0.14f
+                        if (best.score < 0.45f) {
                             // keep it for a one-tap correction, but do not pollute the font with it
                             if (unsureQueue.size < 60) {
                                 unsureQueue.add(
@@ -726,7 +730,7 @@ class MainActivity : Activity() {
                             }
                             continue
                         }
-                        if (unsure && unsureQueue.size < 60) {
+                        if (unsure && unsureQueue.size < 80) {
                             unsureQueue.add(
                                 GlyphAtlas.Sample(
                                     best.codePoint, crop.tile, emb, 0.25f, crop.aspect, pageIdx,

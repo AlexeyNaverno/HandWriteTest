@@ -240,8 +240,12 @@ class GlyphAtlas(
      *   y_font = centre - (yTile * 64 - 32) * inkScale
      */
     fun flowInFontUnits(sample: Sample, path: GlyphPath): com.handwrite.core.font.StrokeFlow? {
-        val f = StrokeFlow.flowOf(sample)
-        if (f.entry == null && f.exit == null) return null
+        // The pen path (the skeleton centre-line) is what a join must follow: it says where the pen
+        // came in, where it went out, and which way it was moving at both ends. Outline extremes
+        // cannot express that, which is why early joins looked like random ticks.
+        val pen = PenPath.pathOf(sample)
+        val start = pen.start ?: return null
+        val end = pen.end ?: return null
         val xHeight = unitsPerEm * X_HEIGHT_RATIO
         val growth = sample.sizeRatio.coerceIn(0.5f, 2.4f)
         val inkScale = xHeight * growth / INK_PIXELS * (64f / 58f)
@@ -251,15 +255,22 @@ class GlyphAtlas(
             val pts = c.points
             for (i in pts.indices step 2) if (pts[i] < xmin) xmin = pts[i]
         }
+        // the pen path lives on the same 64x64 tile, so the same mapping applies
         val lsb = unitsPerEm * 0.035f
         val centre = xHeight / 2f - sample.centerRatio.coerceIn(-1.5f, 1.5f) * xHeight
-        fun tx(t: StrokeFlow.Terminal): com.handwrite.core.font.StrokeFlow.Terminal {
-            val x = lsb + (t.x * TileRasterizer.SIZE - xmin) * inkScale
-            val y = centre - (t.y * TileRasterizer.SIZE - TileRasterizer.SIZE / 2f) * inkScale
-            return com.handwrite.core.font.StrokeFlow.Terminal(x, y, t.dx, -t.dy)  // tile y is down
-        }
+        fun fx(x: Float) = lsb + (x * TileRasterizer.SIZE - xmin) * inkScale
+        fun fy(y: Float) = centre - (y * TileRasterizer.SIZE - TileRasterizer.SIZE / 2f) * inkScale
+        val ed = pen.entryDir
+        val xd = pen.exitDir
         return com.handwrite.core.font.StrokeFlow(
-            f.entry?.let { tx(it) }, f.exit?.let { tx(it) }, path.minX, path.maxX
+            entry = com.handwrite.core.font.StrokeFlow.Terminal(
+                fx(start.x), fy(start.y), ed.first, -ed.second
+            ),
+            exit = com.handwrite.core.font.StrokeFlow.Terminal(
+                fx(end.x), fy(end.y), xd.first, -xd.second
+            ),
+            inkMinX = path.minX,
+            inkMaxX = path.maxX
         )
     }
 

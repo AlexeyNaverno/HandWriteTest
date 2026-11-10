@@ -206,8 +206,8 @@ private fun resolveScripts(
         val preferLatin = lat > cyr * 1.05f
         for (idx in run) {
             val gs = guesses[idx]
-            val keep = if (preferLatin) gs.filter { GlyphRecognizer.scriptOfStatic(it.codePoint) == 2 }
-            else gs.filter { GlyphRecognizer.scriptOfStatic(it.codePoint) == 1 }
+            val keep = if (preferLatin) gs.filter { GlyphRecognizer.scriptOf(it.codePoint) == 2 }
+            else gs.filter { GlyphRecognizer.scriptOf(it.codePoint) == 1 }
             out[idx] = if (keep.isNotEmpty()) keep else gs
         }
         run = ArrayList()
@@ -217,13 +217,13 @@ private fun resolveScripts(
     for (i in guesses.indices) {
         val gs = guesses[i]
         val best = gs.firstOrNull()
-        if (best == null || GlyphRecognizer.scriptOfStatic(best.codePoint) == 0) {
+        if (best == null || GlyphRecognizer.scriptOf(best.codePoint) == 0) {
             flush(); out.add(gs); continue
         }
         out.add(gs)
         run.add(i)
-        cyr += gs.firstOrNull { GlyphRecognizer.scriptOfStatic(it.codePoint) == 1 }?.score ?: 0f
-        lat += gs.firstOrNull { GlyphRecognizer.scriptOfStatic(it.codePoint) == 2 }?.score ?: 0f
+        cyr += gs.firstOrNull { GlyphRecognizer.scriptOf(it.codePoint) == 1 }?.score ?: 0f
+        lat += gs.firstOrNull { GlyphRecognizer.scriptOf(it.codePoint) == 2 }?.score ?: 0f
         val crop = page.crops.getOrNull(i)
         val nextCrop = page.crops.getOrNull(i + 1)
         val gapTooWide = crop != null && nextCrop != null &&

@@ -39,8 +39,8 @@ RESCOMP="$OUT/res"
 rm -rf "$OUT"
 mkdir -p "$CLASSES" "$DEX" "$RESCOMP" "$OUT/gen"
 
-VERSION_NAME="0.0.1"
-VERSION_CODE="1"
+VERSION_NAME="0.0.2"
+VERSION_CODE="2"
 APP_ID="com.handwrite.app"
 
 echo "==> 1/7 compile Kotlin"
