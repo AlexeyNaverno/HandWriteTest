@@ -25,12 +25,20 @@ object TileRasterizer {
         val target = (SIZE - 6).toFloat()
         val scale = target / max(w, h)
         val ox = (SIZE - w * scale) / 2f - path.minX * scale
-        val oy = (SIZE - h * scale) / 2f - path.minY * scale
+        /*
+         * Note the minus sign: font space is y-up (the baseline is 0 and "й" has the larger y),
+         * while a tile is y-down like an image. Flipping here is what makes the tile look like the
+         * letter does on paper - without it every template is stored upside down and the neural
+         * network cannot match a single real crop (it scored 11/43 instead of 43/43).
+         */
+        val oy = (SIZE - h * scale) / 2f + path.maxY * scale
         val out = FloatArray(SIZE * SIZE)
         // the scanline filler works on the flattened polygon set; the non-zero winding rule keeps
         // the counters (holes) of "о", "а", "8", ... open
         val polys = path.flatten(0.25f).map { flat ->
-            FloatArray(flat.size) { i -> if (i % 2 == 0) flat[i] * scale + ox else flat[i] * scale + oy }
+            FloatArray(flat.size) { i ->
+                if (i % 2 == 0) flat[i] * scale + ox else -flat[i] * scale + oy
+            }
         }
         fill(polys, out, 3)
         return out
