@@ -17,6 +17,20 @@
 | PDF | свой минимальный PDF-writer (без AndroidX/библиотек), `content://` для «Поделиться»/печати |
 | EN | печатные буквы без соединений (`WritingMode.ENGLISH_PRINT`) |
 
+## Скачивание APK
+
+Основная ссылка:
+
+    https://github.com/AlexeyNaverno/HandWriteTest/raw/main/dist/handwrite-0.0.2.apk
+
+Если браузеру это не нравится (GitHub иногда блокирует raw-файлы), скачайте zip ветки
+`main` — APK лежит внутри в папке `dist/`:
+
+    https://codeload.github.com/AlexeyNaverno/HandWriteTest/zip/refs/heads/main
+
+Проверка целостности: sha256 `2d9d3e022c559a96b51a92eeb79bb9710221d27583c41ce7d47d660749dbb65c`,
+размер 1 566 500 Б.
+
 ## Что изменилось в 0.0.2 (по отчёту с реального устройства)
 
 | Проблема в 0.0.1 | Что сделано |
