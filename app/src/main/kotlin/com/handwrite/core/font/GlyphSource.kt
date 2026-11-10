@@ -20,6 +20,23 @@ interface GlyphSource {
     /** outline in font units, y up */
     fun path(gid: Int, coords: Map<String, Float>): GlyphPath
 
+    /**
+     * Outline of a glyph for one specific place in the text.
+     *
+     * Handwriting never repeats a letter exactly: the same "о" is written slightly differently every
+     * time. A source that stores several variants (the learned atlas) uses [variantSeed] to cycle
+     * through them, so a page stops looking stamped. Font sources ignore the seed and just draw the
+     * glyph. The seed must be derived from the glyph's position in the text, not from the glyph id,
+     * otherwise every copy of a letter picks the same variant.
+     */
+    fun pathAt(gid: Int, coords: Map<String, Float>, variantSeed: Int): GlyphPath = path(gid, coords)
+
+    /**
+     * Glyph id of a two-letter ligature the user wrote, or 0 when this source has none.
+     * The layout substitutes such a pair for a single glyph, the way a real font's `liga` feature does.
+     */
+    fun ligatureGid(first: Int, second: Int): Int = 0
+
     /** GPOS pair kerning in font units (negative = tighten) */
     fun kerning(leftGid: Int, rightGid: Int): Int = 0
 

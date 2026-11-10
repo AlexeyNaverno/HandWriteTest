@@ -1,0 +1,55 @@
+name: Build APK
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build release APK
+        run: gradle --no-daemon assembleRelease
+
+      - name: Name the artifact
+        run: |
+          mkdir -p out
+          version="${GITHUB_REF_NAME#v}"
+          if [ -z "$version" ] || [ "$version" = "$GITHUB_REF_NAME" ]; then version="dev-${GITHUB_SHA::7}"; fi
+          cp app/build/outputs/apk/release/app-release.apk "out/handwrite-$version.apk"
+          sha256sum "out/handwrite-$version.apk" > "out/handwrite-$version.apk.sha256"
+          cat "out/handwrite-$version.apk.sha256"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: out/*
+
+      - name: Attach APK to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          prerelease: true
