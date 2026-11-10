@@ -21,25 +21,27 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # The runner image already ships an Android SDK; the third-party setup action kept failing on
+      # it, so the SDK is configured directly. Fewer moving parts, and easy to read for F-Droid
+      # maintainers who want to see exactly what the build needs.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          # wait for the licenses to be accepted, otherwise "yes | sdkmanager --licenses" races the
-          # setup action and the step fails with a bare exit code
-          log-accepted-android-sdk-licenses: false
-          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.10.2"
-
-      - name: Accept Android SDK licenses
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "sdk.dir=$SDK" > local.properties
+          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SM" ]; then SM="$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)"; fi
+          echo "sdkmanager: $SM"
+          yes | "$SM" --licenses > /dev/null || true
+          "$SM" --install "platforms;android-34" "build-tools;34.0.0" > /dev/null
+          ls "$SDK/platforms" "$SDK/build-tools"
 
       - name: Build release APK
         run: gradle --no-daemon assembleRelease --stacktrace
+
+      - name: Run unit tests
+        run: gradle --no-daemon test --stacktrace
 
       - name: Name the artifact
         run: |
