@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ink">#FF1B2A4A</color>
+    <color name="paper">#FFFFFDF7</color>
+    <color name="accent">#FF2E6BE6</color>
+    <color name="accent_dark">#FF1B4CB0</color>
+    <color name="surface">#FFF4F1E9</color>
+    <color name="surface_dark">#FF171A21</color>
+    <color name="text_primary">#FF1A1D24</color>
+    <color name="text_secondary">#FF5C6470</color>
+    <color name="divider">#FFDCD8CC</color>
+</resources>

@@ -1,0 +1,23 @@
+# build output
+build/
+!build/dev/*.kt
+!build/dev/*.py
+!build/dev/README.md
+*.apk
+*.aab
+*.dex
+*.class
+*.jar
+*.bin
+
+# python tooling
+__pycache__/
+*.pyc
+.venv/
+
+# local experiments
+/tmp/
+*.gray
+
+# release artifact is shipped on purpose
+!dist/*.apk
