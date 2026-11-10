@@ -38,9 +38,15 @@ data class M2x3(
             return M2x3(a = cs, b = sn, c = -sn, d = cs)
         }
 
+        /**
+         * Horizontal slant, positive degrees lean the top of a letter to the RIGHT (forward slant,
+         * the way handwriting is usually written). The composition in [HandLayout] already flips the
+         * glyph into page space (y grows downwards), so the matrix coefficient is -tan: with
+         * x' = x + c*y and y pointing down, a negative c shifts the upper part of the glyph right.
+         */
         fun skewX(deg: Float): M2x3 {
             val t = Math.tan(Math.toRadians(deg.toDouble())).toFloat()
-            return M2x3(c = t)
+            return M2x3(c = -t)
         }
     }
 }

@@ -230,6 +230,50 @@ class GlyphAtlas(
      * Width of a letter, measured on the vectorised outline (so a narrow "г" and a wide "ж" get
      * the space they actually need) plus a side bearing that looks right for connected writing.
      */
+    /**
+     * Pen entry/exit of a learned letter in font units, consistent with [pathFor].
+     *
+     * [StrokeFlow] works on the 64x64 ink tile (x, y in 0..1, y down); the glyph is drawn from the
+     * same tile with the scale and offsets used by [pathFor], so the conversion is exact:
+     *
+     *   x_font = lsb + (xTile * 64 - xmin) * inkScale
+     *   y_font = centre - (yTile * 64 - 32) * inkScale
+     */
+    fun flowInFontUnits(sample: Sample, path: GlyphPath): com.handwrite.core.font.StrokeFlow? {
+        // The pen path (the skeleton centre-line) is what a join must follow: it says where the pen
+        // came in, where it went out, and which way it was moving at both ends. Outline extremes
+        // cannot express that, which is why early joins looked like random ticks.
+        val pen = PenPath.pathOf(sample)
+        val start = pen.start ?: return null
+        val end = pen.end ?: return null
+        val xHeight = unitsPerEm * X_HEIGHT_RATIO
+        val growth = sample.sizeRatio.coerceIn(0.5f, 2.4f)
+        val inkScale = xHeight * growth / INK_PIXELS * (64f / 58f)
+        val contours = TileVectorizer.vectorize(sample.tile, TileRasterizer.SIZE)
+        var xmin = TileRasterizer.SIZE / 2f
+        for (c in contours) {
+            val pts = c.points
+            for (i in pts.indices step 2) if (pts[i] < xmin) xmin = pts[i]
+        }
+        // the pen path lives on the same 64x64 tile, so the same mapping applies
+        val lsb = unitsPerEm * 0.035f
+        val centre = xHeight / 2f - sample.centerRatio.coerceIn(-1.5f, 1.5f) * xHeight
+        fun fx(x: Float) = lsb + (x * TileRasterizer.SIZE - xmin) * inkScale
+        fun fy(y: Float) = centre - (y * TileRasterizer.SIZE - TileRasterizer.SIZE / 2f) * inkScale
+        val ed = pen.entryDir
+        val xd = pen.exitDir
+        return com.handwrite.core.font.StrokeFlow(
+            entry = com.handwrite.core.font.StrokeFlow.Terminal(
+                fx(start.x), fy(start.y), ed.first, -ed.second
+            ),
+            exit = com.handwrite.core.font.StrokeFlow.Terminal(
+                fx(end.x), fy(end.y), xd.first, -xd.second
+            ),
+            inkMinX = path.minX,
+            inkMaxX = path.maxX
+        )
+    }
+
     fun advanceFor(sample: Sample, em: Float = unitsPerEm.toFloat()): Float {
         val p = pathOf(sample, em)
         val w = (p.maxX - p.minX)
@@ -464,6 +508,13 @@ class AtlasGlyphSource(
     override val weightMin: Float get() = 400f
     override val weightDefault: Float get() = 400f
     override val weightMax: Float get() = 400f
+
+    override fun strokeFlow(gid: Int): com.handwrite.core.font.StrokeFlow? {
+        if (isFallback(gid)) return null
+        val sample = atlas.pick(gid, gid * 31) ?: return null
+        val path = atlas.pathOf(sample, unitsPerEm.toFloat())
+        return atlas.flowInFontUnits(sample, path)
+    }
 
     override fun isLetterGlyph(cp: Int, gid: Int): Boolean = Character.isLetter(cp)
 }

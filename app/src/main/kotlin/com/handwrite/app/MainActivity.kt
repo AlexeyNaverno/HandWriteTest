@@ -467,7 +467,8 @@ class MainActivity : Activity() {
             marginRightMm = style.marginRightMm,
             marginTopMm = style.marginTopMm,
             marginBottomMm = style.marginBottomMm,
-            slantDeg = defaults.slantDeg,
+            // печатные стили не наклоняются: «Наклон» обнуляется, чтобы буквы не шли боком
+            slantDeg = if (mode == WritingMode.ENGLISH_PRINT) 0f else defaults.slantDeg,
             connectLetters = defaults.connectLetters,
             fontAsset = defaults.fontAsset,
             useFontLigatures = mode != WritingMode.ENGLISH_PRINT,
@@ -670,14 +671,14 @@ class MainActivity : Activity() {
                         bar?.progress = 5 + pageIdx * 60 / uris.size
                         status?.text = "Страница ${pageIdx + 1}: поиск букв…"
                     }
-                    var page = InkSegmenter.segment(gray.data, gray.width, gray.height)
+                    var page = InkSegmenter.segment(gray.data, gray.width, gray.height, preMask = gray.ink)
                     val pageGuesses = classifyAll(recognizer, page, bar, pageIdx, uris.size)
                     // A page that looks like a printed template sheet is re-segmented as a grid:
                     // there the labels are known from the position, which beats OCR hands down.
                     if (!rowsChecked) {
                         rowsChecked = true
                         val counts = page.rows.map { it.size }
-                        val sheetPage = InkSegmenter.segment(gray.data, gray.width, gray.height, template = true)
+                        val sheetPage = InkSegmenter.segment(gray.data, gray.width, gray.height, template = true, preMask = gray.ink)
                         val sheetGuesses = classifyAll(recognizer, sheetPage, bar, pageIdx, uris.size)
                         val indexOfCrop = HashMap<InkSegmenter.Crop, Int>()
                         for ((ci, crop) in sheetPage.crops.withIndex()) indexOfCrop[crop] = ci
@@ -698,7 +699,7 @@ class MainActivity : Activity() {
                         sheetFailedRows = counts
                     }
                     // plain page: keep only crops the network is confident about
-                    val full: List<List<GlyphRecognizer.Guess>> = pageGuesses
+                    val full: List<List<GlyphRecognizer.Guess>> = resolveScripts(pageGuesses, page)
                     var accepted = 0
                     for ((i, crop) in page.crops.withIndex()) {
                         if (i % 8 == 0) {
@@ -712,8 +713,12 @@ class MainActivity : Activity() {
                         val second = gs.getOrNull(1)
                         val margin = if (second == null) 1f else best.score - second.score
                         val emb = HandAssets.embedder(this)?.embed(crop.tile) ?: continue
-                        val unsure = best.score < 0.55f || margin < 0.10f
-                        if (best.score < 0.30f) {
+                        // A wrong label in the atlas is much worse than a missing one: it makes the
+                        // rendered text show the wrong letter, which the user reads as "почерк
+                        // создан с ошибкой". So only confident letters are learned, everything else
+                        // goes to the "Уточнить" review where one tap fixes it.
+                        val unsure = best.score < 0.62f || margin < 0.14f
+                        if (best.score < 0.45f) {
                             // keep it for a one-tap correction, but do not pollute the font with it
                             if (unsureQueue.size < 60) {
                                 unsureQueue.add(
@@ -725,7 +730,7 @@ class MainActivity : Activity() {
                             }
                             continue
                         }
-                        if (unsure && unsureQueue.size < 60) {
+                        if (unsure && unsureQueue.size < 80) {
                             unsureQueue.add(
                                 GlyphAtlas.Sample(
                                     best.codePoint, crop.tile, emb, 0.25f, crop.aspect, pageIdx,
@@ -812,12 +817,72 @@ class MainActivity : Activity() {
     ): List<List<GlyphRecognizer.Guess>> {
         val out = ArrayList<List<GlyphRecognizer.Guess>>(page.crops.size)
         for ((i, crop) in page.crops.withIndex()) {
-            out.add(recognizer.classify(crop, page))
+            // A handwritten page is often mixed even when the style says otherwise: English words
+            // between Russian ones, or a whole English page learned while the style is "RU".
+            // Asking the recogniser for both scripts lets us keep them all; the language is then
+            // decided per word (see resolveScripts).
+            out.add(recognizer.classify(crop, page, bothScripts = true))
             if (i % 8 == 0) {
                 val frac = i.toFloat() / maxOf(1, page.crops.size)
                 handler.post { bar?.progress = (5 + pageIdx * 60 / pageCount + (frac * 30 / pageCount)).toInt() }
             }
         }
+        return out
+    }
+
+    /**
+     * Keeps one script per word.
+     *
+     * Cyrillic and Latin share most letterforms ("о/o", "а/a", "е/e", "р/p", "с/c", "х/x"),
+     * so a Russian page can come back with a few English letters and an English page with a few
+     * Russian ones. Words, however, are written in one script. For every run of letters we add up
+     * the confidence the best guess would have in each script and keep the winner for the whole
+     * run: an English word is then learned as English (not dropped as "not in the RU charset"),
+     * and Latin look-alikes no longer sneak into a Russian word.
+     */
+    private fun resolveScripts(
+        guesses: List<List<GlyphRecognizer.Guess>>,
+        page: InkSegmenter.Page
+    ): List<List<GlyphRecognizer.Guess>> {
+        val out = ArrayList<List<GlyphRecognizer.Guess>>(guesses.size)
+        var run = ArrayList<Int>()          // crop indices of the current word
+        var cyr = 0f
+        var lat = 0f
+        fun flush() {
+            val preferLatin = lat > cyr * 1.05f
+            for (idx in run) {
+                val gs = guesses[idx]
+                val keep = if (preferLatin) gs.filter { GlyphRecognizer.scriptOf(it.codePoint) == 2 }
+                else gs.filter { GlyphRecognizer.scriptOf(it.codePoint) == 1 }
+                out[idx] = if (keep.isNotEmpty()) keep else gs
+            }
+            run = ArrayList()
+            cyr = 0f
+            lat = 0f
+        }
+        for (i in guesses.indices) {
+            val gs = guesses[i]
+            val best = gs.firstOrNull()
+            if (best == null || GlyphRecognizer.scriptOf(best.codePoint) == 0) {
+                flush()
+                out.add(gs)
+                continue
+            }
+            out.add(gs)
+            run.add(i)
+            val bestCyr = gs.firstOrNull { GlyphRecognizer.scriptOf(it.codePoint) == 1 }?.score ?: 0f
+            val bestLat = gs.firstOrNull { GlyphRecognizer.scriptOf(it.codePoint) == 2 }?.score ?: 0f
+            cyr += bestCyr
+            lat += bestLat
+            // a word never spans a whole line: stop at a wide gap (the segmenter keeps x order)
+            val next = guesses.getOrNull(i + 1)
+            val crop = page.crops.getOrNull(i)
+            val nextCrop = page.crops.getOrNull(i + 1)
+            val gapTooWide = crop != null && nextCrop != null &&
+                (nextCrop.x - (crop.x + crop.w)).toFloat() > page.lineHeight * 0.55f
+            if (next == null || next.isEmpty() || gapTooWide) flush()
+        }
+        flush()
         return out
     }
 
@@ -1054,7 +1119,7 @@ class MainActivity : Activity() {
             style = style.copy(pressureVariation = v)
             scheduleRender()
         })
-        card.addView(slider("Наклон, °", -10f, 20f, style.slantDeg) { v ->
+        card.addView(slider("Наклон, ° (вправо «+»)", -10f, 20f, style.slantDeg) { v ->
             style = style.copy(slantDeg = v)
             scheduleRender()
         })
@@ -1078,13 +1143,13 @@ class MainActivity : Activity() {
         card.addView(Ui.sectionTitle(this, "Соединения букв"))
         val connRow = Ui.row(this)
         connRow.addView(Ui.chip(this, "Слитно", style.connectLetters) {
-            style = style.copy(connectLetters = true, letterSpacingEm = -0.035f)
+            style = style.copy(connectLetters = true, letterSpacingEm = 0.004f)
             showTab(2)
             scheduleRender()
         })
         connRow.addView(View(this).also { it.layoutParams = LinearLayout.LayoutParams(Ui.dp(this, 6f), 1) })
         connRow.addView(Ui.chip(this, "Печатно", !style.connectLetters) {
-            style = style.copy(connectLetters = false, letterSpacingEm = 0.01f)
+            style = style.copy(connectLetters = false, letterSpacingEm = 0.03f, slantDeg = 0f)
             showTab(2)
             scheduleRender()
         })

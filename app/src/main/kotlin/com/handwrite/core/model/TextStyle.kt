@@ -59,7 +59,7 @@ data class TextStyle(
     /** line height multiplier */
     val lineSpacing: Float = 1.55f,
     /** extra space between letters, in em (can be negative to tighten cursive) */
-    val letterSpacingEm: Float = 0f,
+    val letterSpacingEm: Float = 0.004f,
     /** extra space between words, in em */
     val wordSpacingEm: Float = 0.30f,
     /** red line: indent of the first line of a paragraph, in em (0 = off) */
@@ -71,9 +71,9 @@ data class TextStyle(
     /** thickness variation along a word, 0 = even, 1 = strong (нажим «гуляет») */
     val pressureVariation: Float = 0.45f,
     /** random vertical/horizontal offsets, relative to the font size */
-    val jitterEm: Float = 0.020f,
+    val jitterEm: Float = 0.006f,
     /** random rotation per glyph, degrees */
-    val jitterRotDeg: Float = 0.9f,
+    val jitterRotDeg: Float = 0.35f,
     /** slow baseline wave (рука «плывёт») in em */
     val baselineWaveEm: Float = 0.014f,
     /** join letters with connective strokes/ligatures */
@@ -108,16 +108,16 @@ data class TextStyle(
         fun defaultsFor(mode: WritingMode): TextStyle = when (mode) {
             WritingMode.RUSSIAN_CURSIVE -> TextStyle(
                 mode = mode, fontAsset = "Caveat-Regular.ttf", sizePt = 15f,
-                letterSpacingEm = -0.035f, slantDeg = 4f, connectLetters = true,
+                letterSpacingEm = 0.004f, slantDeg = 4f, connectLetters = true,
                 paperStyle = PaperStyle.RULED, lineSpacing = 1.62f
             )
             WritingMode.ENGLISH_PRINT -> TextStyle(
                 mode = mode, fontAsset = "PatrickHand-Regular.ttf", sizePt = 13f,
-                letterSpacingEm = 0.02f, slantDeg = 0f, connectLetters = false, paperStyle = PaperStyle.RULED
+                letterSpacingEm = 0.01f, slantDeg = 0f, connectLetters = false, paperStyle = PaperStyle.RULED
             )
             WritingMode.MIXED -> TextStyle(
                 mode = mode, fontAsset = "Caveat-Regular.ttf", sizePt = 15f,
-                letterSpacingEm = -0.02f, slantDeg = 3f, connectLetters = true, paperStyle = PaperStyle.RULED
+                letterSpacingEm = 0.004f, slantDeg = 3f, connectLetters = true, paperStyle = PaperStyle.RULED
             )
         }
     }

@@ -102,7 +102,12 @@ class GlyphRecognizer(
      * @param crop the segmented letter
      * @param line the whole page (for the x-height band)
      */
-    fun classify(crop: InkSegmenter.Crop, line: InkSegmenter.Page): List<Guess> {
+    /**
+     * @param bothScripts ignore the language filter and return Cyrillic and Latin candidates alike.
+     *   Used when learning from a photo, where the page language is not known in advance and the
+     *   decision is made per word afterwards (see MainActivity.resolveScripts).
+     */
+    fun classify(crop: InkSegmenter.Crop, line: InkSegmenter.Page, bothScripts: Boolean = false): List<Guess> {
         if (templates.isEmpty()) return emptyList()
         val emb = embedder.embed(crop.tile)
         val top = crop.y.toFloat()
@@ -113,11 +118,11 @@ class GlyphRecognizer(
         val isDeep = (bottom - mid) > lh * 0.32f       // goes below the baseline
         val scores = HashMap<Int, Float>()
         val filter = allowed
-        val prefer = preferredScript()
+        val prefer = if (bothScripts) 0 else preferredScript()
         for (t in templates) {
-            if (filter != null && t.codePoint !in filter) continue
+            if (!bothScripts && filter != null && t.codePoint !in filter) continue
             var sim = cosine(emb, t.embedding)
-            if (prefer > 0 && scriptOf(t.codePoint) != prefer) sim -= foreignScriptPenalty
+            if (prefer > 0 && scriptOfLocal(t.codePoint) != prefer) sim -= foreignScriptPenalty
             // geometry priors help a lot on small datasets
             if (isTall && !t.ascender) sim -= 0.08f
             if (isDeep && !t.descender) sim -= 0.06f
@@ -133,6 +138,9 @@ class GlyphRecognizer(
             .map { Guess(it.key, it.value) }
     }
 
+    /** the network embedding of a crop's tile; used to group crops of the same letter */
+    fun embeddingOf(crop: InkSegmenter.Crop): FloatArray = embedder.embed(crop.tile)
+
     fun classifyTile(tile: FloatArray): List<Guess> {
         val emb = embedder.embed(tile)
         val scores = HashMap<Int, Float>()
@@ -141,7 +149,7 @@ class GlyphRecognizer(
         for (t in templates) {
             if (filter != null && t.codePoint !in filter) continue
             var sim = cosine(emb, t.embedding)
-            if (prefer > 0 && scriptOf(t.codePoint) != prefer) sim -= foreignScriptPenalty
+            if (prefer > 0 && scriptOfLocal(t.codePoint) != prefer) sim -= foreignScriptPenalty
             val prev = scores[t.codePoint]
             if (prev == null || sim > prev) scores[t.codePoint] = sim
         }
@@ -157,7 +165,7 @@ class GlyphRecognizer(
         val f = allowed ?: return 0
         var cyr = 0
         var lat = 0
-        for (cp in f) when (scriptOf(cp)) {
+        for (cp in f) when (scriptOfLocal(cp)) {
             1 -> cyr++
             2 -> lat++
         }
@@ -169,17 +177,7 @@ class GlyphRecognizer(
     }
 
     /** 1 = Cyrillic letter, 2 = Latin letter, 0 = digit/punctuation */
-    private fun scriptOf(cp: Int): Int {
-        val b = Character.UnicodeBlock.of(cp)
-        return when (b) {
-            Character.UnicodeBlock.CYRILLIC,
-            Character.UnicodeBlock.CYRILLIC_SUPPLEMENTARY -> 1
-            Character.UnicodeBlock.BASIC_LATIN,
-            Character.UnicodeBlock.LATIN_1_SUPPLEMENT,
-            Character.UnicodeBlock.LATIN_EXTENDED_A -> if (Character.isLetter(cp)) 2 else 0
-            else -> 0
-        }
-    }
+    private fun scriptOfLocal(cp: Int): Int = scriptOf(cp)
 
     private fun cosine(a: FloatArray, b: FloatArray): Float {
         var s = 0f
@@ -189,6 +187,16 @@ class GlyphRecognizer(
     }
 
     companion object {
+        /** 1 = Cyrillic letter, 2 = Latin letter, 0 = digit/punctuation */
+        fun scriptOf(cp: Int): Int = when (Character.UnicodeBlock.of(cp)) {
+            Character.UnicodeBlock.CYRILLIC,
+            Character.UnicodeBlock.CYRILLIC_SUPPLEMENTARY -> 1
+            Character.UnicodeBlock.BASIC_LATIN,
+            Character.UnicodeBlock.LATIN_1_SUPPLEMENT,
+            Character.UnicodeBlock.LATIN_EXTENDED_A -> if (Character.isLetter(cp)) 2 else 0
+            else -> 0
+        }
+
         /** letters + digits + punctuation of the script the user is writing in */
         const val CYRILLIC = "абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"
         const val LATIN = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
