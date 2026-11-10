@@ -220,6 +220,9 @@ object InkSegmenter {
 
     /* ------------------------------------------------------------------ */
 
+    /** column ink must be below this fraction of the letter body to count as a letter boundary */
+    private const val MIN_CUT_RATIO = 0.45f
+
     class Box(val x0: Int, val y0: Int, var x1: Int, var y1: Int, val count: Int = 1) {
         val x get() = x0
         val y get() = y0
@@ -459,16 +462,27 @@ object InkSegmenter {
     }
 
     /** cuts a wide blob into several letters using the vertical ink profile */
+    /**
+     * Splits a run of touching letters by the minima of the vertical ink profile.
+     *
+     * Cursive letters in flowing text are joined by strokes that sit on the baseline, so the
+     * profile between two letters drops to a few pixels instead of zero - a plain "cut at the
+     * deepest minimum" is not enough. A cut is accepted when the column is clearly thinner than
+     * the letter body around it (see [MIN_CUT_RATIO]); without that test the splitter produced
+     * 175 "letters" for a 299-character page and every crop was a fragment.
+     */
     private fun splitTouching(b: Box, bin: BooleanArray, w: Int, lineHeight: Float): List<Box> {
         val expected = lineHeight * 0.95f
-        if (b.w <= expected * 1.55f || b.count > 1) return listOf(b)
+        if (b.w <= expected * 1.35f || b.count > 1) return listOf(b)
         val profile = IntArray(b.w)
         for (x in b.x0..b.x1) {
             var c = 0
             for (y in b.y0..b.y1) if (bin[y * w + x]) c++
             profile[x - b.x0] = c
         }
+        // a letter is at most ~1.35 x-heights wide, so the number of pieces follows from the width
         val pieces = min(6, max(2, Math.round(b.w / expected)))
+        val body = profile.sorted()[profile.size / 2].toFloat()
         // find (pieces-1) minima that are separated by at least 0.45 * expected width
         val cuts = ArrayList<Int>()
         var from = (expected * 0.45f).toInt()
@@ -483,7 +497,8 @@ object InkSegmenter {
                     bestX = x
                 }
             }
-            if (bestX >= 0) {
+            // only a real valley counts: the column must carry much less ink than the body
+            if (bestX >= 0 && bestV <= body * MIN_CUT_RATIO) {
                 cuts.add(bestX)
                 from = bestX + (expected * 0.45f).toInt()
             }

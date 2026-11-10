@@ -564,6 +564,14 @@ class MainActivity : Activity() {
         learningStateStatus = status
     }
 
+    /**
+     * Crops the network was not sure about (low score or a tiny margin to the runner-up). They are
+     * not thrown away: the user can label them in one tap, which is far cheaper than writing the
+     * whole alphabet again, and they are exactly the letters that would otherwise be missing from
+     * the font.
+     */
+    private val unsureQueue = ArrayList<GlyphAtlas.Sample>()
+
     private var learningStateProgress: LinearLayout? = null
     private var learningStateBar: ProgressBar? = null
     private var learningStateStatus: TextView? = null
@@ -617,6 +625,7 @@ class MainActivity : Activity() {
             return
         }
         learningInProgress = true
+        unsureQueue.clear()
         val progress = learningStateProgress
         val bar = learningStateBar
         val status = learningStateStatus
@@ -678,8 +687,28 @@ class MainActivity : Activity() {
                         val best = gs.firstOrNull() ?: continue
                         val second = gs.getOrNull(1)
                         val margin = if (second == null) 1f else best.score - second.score
-                        if (best.score < 0.35f) continue
                         val emb = HandAssets.embedder(this)?.embed(crop.tile) ?: continue
+                        val unsure = best.score < 0.55f || margin < 0.10f
+                        if (best.score < 0.30f) {
+                            // keep it for a one-tap correction, but do not pollute the font with it
+                            if (unsureQueue.size < 60) {
+                                unsureQueue.add(
+                                    GlyphAtlas.Sample(
+                                        best.codePoint, crop.tile, emb, 0.2f, crop.aspect, pageIdx,
+                                        crop.x.toFloat(), crop.y.toFloat(), crop.sizeRatio, crop.centerRatio
+                                    )
+                                )
+                            }
+                            continue
+                        }
+                        if (unsure && unsureQueue.size < 60) {
+                            unsureQueue.add(
+                                GlyphAtlas.Sample(
+                                    best.codePoint, crop.tile, emb, 0.25f, crop.aspect, pageIdx,
+                                    crop.x.toFloat(), crop.y.toFloat(), crop.sizeRatio, crop.centerRatio
+                                )
+                            )
+                        }
                         val sample = GlyphAtlas.Sample(
                             codePoint = best.codePoint,
                             tile = crop.tile,
@@ -730,6 +759,9 @@ class MainActivity : Activity() {
                                 useAtlas()
                                 showTab(0)
                             }
+                        }
+                        .setNeutralButton(if (unsureQueue.isEmpty()) null else "Уточнить ${unsureQueue.size}") { _, _ ->
+                            showUnsure()
                         }
                         .setNegativeButton("Проверить буквы") { _, _ -> showGallery() }
                         .show()
@@ -805,6 +837,98 @@ class MainActivity : Activity() {
         // the font chips are rebuilt from scratch, so this is enough
     }
 
+    /**
+     * One-tap labelling of the crops the network was unsure about ("Уточнить N").
+     * The guessed letter is shown above every crop; tapping assigns the guess, long-pressing opens
+     * the full character list.
+     */
+    private fun showUnsure() {
+        if (unsureQueue.isEmpty()) {
+            Toast.makeText(this, "Все буквы распознаны уверенно", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val a = atlas ?: return
+        val scroll = ScrollView(this)
+        val host = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(Ui.dp(this@MainActivity, 14f), Ui.dp(this@MainActivity, 8f),
+                Ui.dp(this@MainActivity, 14f), Ui.dp(this@MainActivity, 8f))
+        }
+        host.addView(
+            Ui.text(
+                this,
+                "Нажмите на букву, если догадка верна, или удерживайте, чтобы выбрать другую. " +
+                    "Так шрифт становится полнее за пару секунд.",
+                13f, Ui.TEXT2
+            )
+        )
+        var pending = unsureQueue.toList()
+        fun rebuild() {
+            host.removeAllViews()
+            host.addView(Ui.text(this, "Осталось: ${pending.size}", 13f, Ui.TEXT2))
+            val row = Ui.row(this)
+            row.setPadding(0, Ui.dp(this, 8f), 0, 0)
+            for (s in pending.take(6)) {
+                val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                val img = ImageView(this)
+                img.setImageBitmap(tileToBitmap(s.tile, 72))
+                img.setBackgroundColor(Color.WHITE)
+                img.setOnClickListener {
+                    a.add(s)
+                    pending = pending - s
+                    rebuild()
+                }
+                img.setOnLongClickListener {
+                    pickCharacter(s, a) { pending = pending - s; rebuild() }
+                    true
+                }
+                col.addView(img, LinearLayout.LayoutParams(Ui.dp(this, 64f), Ui.dp(this, 64f)))
+                col.addView(
+                    Ui.text(this, String(Character.toChars(s.codePoint)), 13f, Ui.INK, true)
+                )
+                row.addView(col, LinearLayout.LayoutParams(Ui.dp(this, 68f), ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+            host.addView(row)
+            if (pending.isEmpty()) {
+                refreshAtlasBadge()
+                scheduleRender()
+            }
+        }
+        rebuild()
+        scroll.addView(host)
+        AlertDialog.Builder(this)
+            .setTitle("Уточнить буквы")
+            .setView(scroll)
+            .setPositiveButton("Готово") { _, _ ->
+                HandAssets.saveAtlas(this, a)
+                atlas = a
+                unsureQueue.clear()
+                scheduleRender()
+            }
+            .show()
+    }
+
+    /** asks the user which character a crop really is, then adds it to the atlas */
+    private fun pickCharacter(sample: GlyphAtlas.Sample, a: GlyphAtlas, done: () -> Unit) {
+        val letters = (AlphabetAligner.RU + AlphabetAligner.RU_UPPER + AlphabetAligner.EN +
+            AlphabetAligner.EN_UPPER + AlphabetAligner.DIGITS + ".,!?;:-—()\"'")
+            .map { it.toString() }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Какая это буква?")
+            .setItems(letters) { _, which ->
+                val ch = letters[which]
+                a.add(
+                    GlyphAtlas.Sample(
+                        ch.codePointAt(0), sample.tile, sample.embedding, 0.9f, sample.aspect,
+                        sample.sourcePage, sample.pageX, sample.pageY, sample.sizeRatio, sample.centerRatio
+                    )
+                )
+                done()
+            }
+            .setNegativeButton("Пропустить") { _, _ -> done() }
+            .show()
+    }
+
     private fun showGallery() {
         val a = atlas ?: run {
             Toast.makeText(this, "Сначала обучите шрифт по фото", Toast.LENGTH_SHORT).show()
@@ -852,14 +976,15 @@ class MainActivity : Activity() {
             .setTitle("Буква «${String(Character.toChars(cp))}»")
             .setMessage("Что делать с этой буквой?")
             .setPositiveButton("Переклассифицировать") { _, _ ->
-                val options = arrayOf("а", "б", "в", "г", "д", "е", "ё", "ж", "з", "и", "й", "к", "л", "м",
-                    "н", "о", "п", "р", "с", "т", "у", "ф", "х", "ц", "ч", "ш", "щ", "ъ", "ы", "ь", "э", "ю", "я")
+                val options = (AlphabetAligner.RU + AlphabetAligner.RU_UPPER + AlphabetAligner.EN +
+                    AlphabetAligner.EN_UPPER + AlphabetAligner.DIGITS)
+                    .map { it.toString() }.toTypedArray()
                 AlertDialog.Builder(this)
                     .setTitle("Введите настоящую букву")
                     .setItems(options) { _, which ->
-                        val ch = options[which][0]
+                        val code = options[which].codePointAt(0)
                         for (s in a.variants(cp).toList()) {
-                            a.retarget(s, ch.code)
+                            a.retarget(s, code)
                         }
                         HandAssets.saveAtlas(this, a)
                         atlas = a
