@@ -97,6 +97,15 @@ object HandAssets {
     @Volatile
     private var recognizer: GlyphRecognizer? = null
 
+    /**
+     * Narrows the recognised alphabet to the language of the photos. Called by the app right before
+     * learning so that Cyrillic handwriting is not classified as the Latin letters that look the
+     * same (к→K, н→H, о→O) - see [GlyphRecognizer.foreignScriptPenalty].
+     */
+    fun setRecognizerLanguage(recognizer: GlyphRecognizer, mode: WritingMode) {
+        recognizer.setAllowedCharacters(GlyphRecognizer.charsetFor(mode))
+    }
+
     fun recognizer(context: Context): GlyphRecognizer? {
         recognizer?.let { return it }
         synchronized(this) {
@@ -108,6 +117,8 @@ object HandAssets {
                 r.buildTemplates(src, GlyphRecognizer.DEFAULT_CHARSET)
             }
             r.setAllowedCharacters(GlyphRecognizer.DEFAULT_CHARSET)
+            // the charset starts as "everything"; the learning flow narrows it to the language of
+            // the page (see MainActivity.onPhotosPicked -> setLanguage)
             recognizer = r
             return r
         }

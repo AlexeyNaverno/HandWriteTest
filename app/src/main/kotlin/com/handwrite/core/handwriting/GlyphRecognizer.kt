@@ -23,13 +23,25 @@ interface TileEmbedder {
 class GlyphRecognizer(
     private val embedder: TileEmbedder,
     /** true when the input is printed text (шире допустимые пропорции) */
-    private val printed: Boolean = false,
+    private val printed: Boolean = false
+) {
+
     /**
      * When set, only these characters are considered. Cyrillic "а/е/о/р/с" and Latin "a/e/o/p/c"
      * are pixel-identical, so without a script filter the network cannot know which one to answer.
      */
     private var allowed: Set<Int>? = null
-) {
+
+    /**
+     * Cost added to a candidate that another script wrote the same way.
+     *
+     * Cyrillic and Latin share many letterforms (К/л look alike, М/м, Н/н, О/о, Т/т, а/a, с/c,
+     * е/e, о/o, р/p, х/x, у/y) and the crop itself carries no hint of the language. On a page of
+     * Russian notes the network happily returns "K" for "к" and "H" for "н", which both hides the
+     * real letter and poisons the atlas. Sending mixed text through the recogniser (WritingMode
+     * MIXED) switches this off.
+     */
+    var foreignScriptPenalty: Float = 0.12f
 
     fun setAllowedCharacters(chars: String?) {
         allowed = if (chars.isNullOrEmpty()) null else chars.map { it.code }.toSet()
@@ -101,9 +113,11 @@ class GlyphRecognizer(
         val isDeep = (bottom - mid) > lh * 0.32f       // goes below the baseline
         val scores = HashMap<Int, Float>()
         val filter = allowed
+        val prefer = preferredScript()
         for (t in templates) {
             if (filter != null && t.codePoint !in filter) continue
             var sim = cosine(emb, t.embedding)
+            if (prefer > 0 && scriptOf(t.codePoint) != prefer) sim -= foreignScriptPenalty
             // geometry priors help a lot on small datasets
             if (isTall && !t.ascender) sim -= 0.08f
             if (isDeep && !t.descender) sim -= 0.06f
@@ -123,13 +137,48 @@ class GlyphRecognizer(
         val emb = embedder.embed(tile)
         val scores = HashMap<Int, Float>()
         val filter = allowed
+        val prefer = preferredScript()
         for (t in templates) {
             if (filter != null && t.codePoint !in filter) continue
-            val sim = cosine(emb, t.embedding)
+            var sim = cosine(emb, t.embedding)
+            if (prefer > 0 && scriptOf(t.codePoint) != prefer) sim -= foreignScriptPenalty
             val prev = scores[t.codePoint]
             if (prev == null || sim > prev) scores[t.codePoint] = sim
         }
         return scores.entries.sortedByDescending { it.value }.take(6).map { Guess(it.key, it.value) }
+    }
+
+    /**
+     * Which script the current [allowed] set is made of: 0 = mixed/unknown (no bias),
+     * 1 = Cyrillic only, 2 = Latin only. Derived from the allowed characters, so the caller does
+     * not have to pass the writing mode around.
+     */
+    private fun preferredScript(): Int {
+        val f = allowed ?: return 0
+        var cyr = 0
+        var lat = 0
+        for (cp in f) when (scriptOf(cp)) {
+            1 -> cyr++
+            2 -> lat++
+        }
+        return when {
+            cyr > 0 && lat == 0 -> 1
+            lat > 0 && cyr == 0 -> 2
+            else -> 0
+        }
+    }
+
+    /** 1 = Cyrillic letter, 2 = Latin letter, 0 = digit/punctuation */
+    private fun scriptOf(cp: Int): Int {
+        val b = Character.UnicodeBlock.of(cp)
+        return when (b) {
+            Character.UnicodeBlock.CYRILLIC,
+            Character.UnicodeBlock.CYRILLIC_SUPPLEMENTARY -> 1
+            Character.UnicodeBlock.BASIC_LATIN,
+            Character.UnicodeBlock.LATIN_1_SUPPLEMENT,
+            Character.UnicodeBlock.LATIN_EXTENDED_A -> if (Character.isLetter(cp)) 2 else 0
+            else -> 0
+        }
     }
 
     private fun cosine(a: FloatArray, b: FloatArray): Float {

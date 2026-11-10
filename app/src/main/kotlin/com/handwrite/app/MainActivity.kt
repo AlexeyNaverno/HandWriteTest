@@ -211,8 +211,8 @@ class MainActivity : Activity() {
 
         val hint = Ui.text(
             this,
-            "Это пример настоящего шрифта. Чтобы писать своим почерком, откройте «Мой почерк» → " +
-                "«Лист-шаблон» и сфотографируйте заполненный лист.",
+            "Это пример встроенного шрифта. Чтобы писать своим почерком, откройте «Мой почерк» " +
+                "и выберите 1–5 фото своих записей — приложение соберёт шрифт из них.",
             12.5f, Ui.TEXT2
         )
         hint.visibility = View.GONE
@@ -493,9 +493,9 @@ class MainActivity : Activity() {
         card.addView(
             Ui.text(
                 this,
-                "Сфотографируйте 1–5 страниц своего почерка (или лист-шаблон с буквами). " +
-                    "Чем ровнее свет и контрастнее ручка — тем лучше распознавание. " +
-                    "Буквы находятся и распознаются нейросетью прямо на телефоне.",
+                "Сфотографируйте 1–5 страниц своих записей — конспект, список, письмо. " +
+                    "Чем крупнее почерк и контрастнее ручка, тем лучше распознавание. " +
+                    "Буквы находит и распознаёт нейросеть прямо на телефоне.",
                 13f, Ui.TEXT2
             )
         )
@@ -520,17 +520,25 @@ class MainActivity : Activity() {
         card.addView(progress)
 
         val learnRow = Ui.row(this)
-        val learnBtn = Ui.button(this, "Собрать мой шрифт из фото", true) {
+        val learnBtn = Ui.button(this, "Собрать шрифт из фотографий", true) {
             pickPhotosForLearning()
         }
         learnRow.addView(learnBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         card.addView(learnRow)
+        card.addView(
+            Ui.text(
+                this,
+                "Обычно из одной страницы получается 30–45 разных букв. Всё, что оказалось не " +
+                    "распознано, попадёт в «Уточнить» — там буквы размечаются одним нажатием.",
+                12.5f, Ui.TEXT2
+            )
+        )
 
         card.addView(Ui.sectionTitle(this, "Шаг 3 · проверка"))
         card.addView(
             Ui.text(
                 this,
-                "После распознавания проверьте буквы: неверные можно поправить, нажав на букву. " +
+                "Проверьте буквы: неверные можно поправить, нажав на букву. " +
                     "Чем больше вариантов одной буквы, тем живее выглядит текст.",
                 13f, Ui.TEXT2
             )
@@ -555,12 +563,13 @@ class MainActivity : Activity() {
         val lp2 = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         lp2.setMargins(Ui.dp(this, 14f), Ui.dp(this, 10f), Ui.dp(this, 14f), 0)
         help.layoutParams = lp2
-        help.addView(Ui.sectionTitle(this, "Лист-шаблон"))
+        help.addView(Ui.sectionTitle(this, "Если нужен полный алфавит"))
         help.addView(
             Ui.text(
                 this,
-                "Самый надёжный способ: напишите на листе алфавит — «абвгдеёжзийклмнопрстуфхцчшщъыьэюя» " +
-                    "и цифры, по одной букве в ячейке. Приложение распознает все буквы сразу и построит шрифт.",
+                "Необязательно. Напишите алфавит и цифры по одной букве в клетке — приложение " +
+                    "подпишет буквы по порядку, и в шрифте сразу окажутся все 33 буквы. " +
+                    "Удобно, если в обычных записях каких-то букв не хватает.",
                 13f, Ui.TEXT2
             )
         )
@@ -638,6 +647,9 @@ class MainActivity : Activity() {
         }
         learningInProgress = true
         unsureQueue.clear()
+        // recognise only the alphabet of the chosen language: otherwise "к" comes back as "K"
+        // and the atlas fills up with Latin look-alikes instead of Russian letters
+        HandAssets.setRecognizerLanguage(recognizer, style.mode)
         val progress = learningStateProgress
         val bar = learningStateBar
         val status = learningStateStatus
@@ -758,9 +770,10 @@ class MainActivity : Activity() {
                     refreshAtlasBadge()
                     val hint = when {
                         newAtlas.letterCount() >= 30 -> ""
-                        sheetFailedRows != null ->
-                            "\n\nПодсказка: чтобы получить все буквы сразу, распечатайте лист-шаблон " +
-                                "(кнопка внизу) и сфотографируйте его — буквы будут подписаны по порядку."
+                        sheetFailedRows != null && newAtlas.letterCount() < 20 ->
+                            "\n\nПодсказка: буквы лучше распознаются на крупном почерке и при хорошем свете. " +
+                                "Если нужен сразу весь алфавит — распечатайте лист-шаблон внизу экрана " +
+                                "«Мой почерк» и сфотографируйте заполненный лист."
                         else -> ""
                     }
                     AlertDialog.Builder(this)
