@@ -1,0 +1,17 @@
+# build output
+build/
+*.apk
+*.aab
+*.dex
+*.class
+*.jar
+
+# python tooling
+__pycache__/
+*.pyc
+.venv/
+
+# local experiments
+/tmp/
+*.gray
+*.bin.tmp
