@@ -25,13 +25,30 @@ class PlacedGlyph(
     /** page-space y of the glyph baseline (used to find natural pen exits) */
     val baselineY: Float = 0f,
     /** fill with the even-odd rule (learned glyphs) instead of non-zero */
-    val evenOdd: Boolean = false
+    val evenOdd: Boolean = false,
+    /**
+     * When set, the glyph is drawn as *pen strokes* instead of a filled outline: the reconstructed
+     * trajectory of the pen through the letter (see [com.handwrite.core.handwriting.PenVectorizer])
+     * extruded with its own width profile. This is what turns "a heap of letter photos" into
+     * handwriting: strokes taper, join smoothly and stay sharp at any size.
+     */
+    val penStrokes: List<PenStroke>? = null
 ) {
     val x0 get() = path.minX
     val y0 get() = path.minY
     val x1 get() = path.maxX
     val y1 get() = path.maxY
 }
+
+/**
+ * One pen movement in page coordinates, ready to be drawn as a filled ribbon.
+ * [widths] are full stroke widths in points, aligned with [points] (x, y pairs).
+ */
+class PenStroke(
+    val points: FloatArray,
+    val widths: FloatArray,
+    val density: Float
+)
 
 /**
  * A connective pen stroke between two letters. The stroke is a tapered ribbon:
@@ -187,13 +204,33 @@ object HandLayout {
      * outline: an empty glyph still consumes an advance, which shifts the rest of the line and is
      * what made lines look ragged.
      */
+    /**
+     * Seed for the variant of the glyph at [index] of the line. Depends on the position in the text
+     * (line + glyph index + word), never on the glyph id alone, so repeated letters differ.
+     */
+    fun variantSeed(lineIndex: Int, wordIndex: Int, glyphIndex: Int): Int =
+        (lineIndex * 73856093) xor (wordIndex * 19349663) xor (glyphIndex * 83492791) xor 0x5F3759DF.toInt()
+
     fun wordGlyphs(word: String, style: TextStyle, source: GlyphSource): IntArray {
         val cps = codePoints(word)
         val keep = ArrayList<Int>(cps.size)
-        for (cp in cps) {
+        var i = 0
+        while (i < cps.size) {
+            val cp = cps[i]
+            // A ligature the user actually wrote beats two letters plus a synthetic connector:
+            // their own "ст" keeps the special join and the little tail. Only cursive modes use them.
+            if (style.connectLetters && i + 1 < cps.size) {
+                val lig = source.ligatureGid(cp, cps[i + 1])
+                if (lig != 0) {
+                    keep.add(lig)
+                    i += 2
+                    continue
+                }
+            }
             var g = source.gid(cp)
             if (g == 0 && cp != 0 && !Character.isWhitespace(cp)) g = source.gid('?'.code)
             if (g != 0) keep.add(g)
+            i++
         }
         if (keep.isEmpty()) return IntArray(0)
         var gids = keep.toIntArray()
@@ -275,9 +312,11 @@ object HandLayout {
             val joinedByFont = gids.size != cps.size
             var prev: LetterRef? = null
             for ((gi, gid) in gids.withIndex()) {
+                // every occurrence of a letter gets its own variant, so a page does not look stamped
+                val seed = variantSeed(lineIndex, wi, gi)
                 val path = source.path(gid, coords)
                 val adv = effectiveAdvance(gid, source, path) * scale
-                val cp = if (!joinedByFont && gi < cps.size) cps[gi] else 0
+                val cp = if (!joinedByFont && gi < cps.size && gid < com.handwrite.core.handwriting.GlyphAtlas.LIGATURE_BASE) cps[gi] else 0
                 val isLast = gi == gids.size - 1
 
                 val jx = (rnd.next() - 0.5f) * 2f * style.jitterEm * size
@@ -290,6 +329,10 @@ object HandLayout {
                     .times(M2x3.rotateDeg(rot))
                     .times(slant)
                     .times(M2x3.scale(scale, -scale))
+                // learned letters are drawn as pen strokes (trajectory + width), font glyphs as outlines
+                val pen = if (source is com.handwrite.core.handwriting.AtlasGlyphSource && source.atlas.hasCode(gid)) {
+                    PenStrokesFor.glyph(source, gid, path, m, seed)
+                } else null
                 val placed = PlacedGlyph(
                     gid = gid,
                     path = path,
@@ -301,12 +344,14 @@ object HandLayout {
                     wordIndex = wi,
                     baselineY = baseline,
                     evenOdd = source.usesEvenOddFill && source is com.handwrite.core.handwriting.AtlasGlyphSource &&
-                        source.atlas.hasCode(gid)
+                        source.atlas.hasCode(gid),
+                    penStrokes = pen
                 )
                 glyphs.add(placed)
 
                 val current = if (cp != 0) {
-                    val flow = if (joinedByFont) null else flows[gid] ?: source.strokeFlow(gid).also { flows[gid] = it }
+                    val flowKey = seed
+                    val flow = if (joinedByFont) null else flows[flowKey] ?: source.strokeFlow(gid).also { flows[flowKey] = it }
                     LetterRef(cp, placed, anchorsOf(gid, path, anchors), pressureHere, flow)
                 } else null
                 if (style.connectLetters && !joinedByFont && current != null && prev != null && !isLast) {

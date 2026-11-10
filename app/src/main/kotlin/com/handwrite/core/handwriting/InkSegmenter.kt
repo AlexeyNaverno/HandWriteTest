@@ -27,7 +27,15 @@ object InkSegmenter {
         /** ink height divided by the median x-height of the row (1 = small letter size) */
         val sizeRatio: Float = 1f,
         /** crop centre relative to the row centre, in x-heights */
-        val centerRatio: Float = 0f
+        val centerRatio: Float = 0f,
+        /**
+         * y of the baseline of this crop's line, in page pixels (0 = not measured).
+         *
+         * A page has many baselines, so anything that needs "the line" - the recognition geometry
+         * priors, the layout - must use the one of the row the crop belongs to, never the middle of
+         * the page.
+         */
+        val baseline: Float = 0f
     ) {
         val area: Int get() = w * h
         val aspect: Float get() = w.toFloat() / max(1, h)
@@ -69,7 +77,7 @@ object InkSegmenter {
             // The colour mask already says what is ink and what is grid, so the threshold must
             // follow it instead of Otsu: on a squared page the grid is half of the "dark" pixels
             // and Otsu happily lands in the middle of the pen strokes.
-            val strong = max(0.35f, InkMask.percentile(preMask, 0.98f) * 0.45f)
+            val strong = inkThreshold(preMask)
             for (i in bin.indices) bin[i] = preMask[i] > strong
         } else {
             for (i in bin.indices) bin[i] = normalised[i] > thr
@@ -108,18 +116,16 @@ object InkSegmenter {
             rows = r.second
             withRows = r.first
         } else {
-            val keyed = crops.map { lineOf(it, lineHeight) to it }
-            val distinct = keyed.map { it.first }.distinct().sorted()
-            rows = distinct.map { k -> keyed.filter { it.first == k }.map { it.second }.sortedBy { it.x } }
+            rows = groupRows(crops, lineHeight)
             withRows = rows.flatten()
             // rewrite row indices so that Crop.row is meaningful
             val measured = measureRows(rows)
-            return Page(width, height, normalised, measured.first, thr, lineHeight, height / 2f, measured.second, false)
+            return Page(width, height, normalised, measured.first, thr, rowHeight(measured.second, lineHeight), height / 2f, measured.second, false)
         }
         val measured = measureRows(rows)
         val mid = if (measured.first.isEmpty()) height / 2f
         else measured.first.map { it.y + it.h / 2f }.sorted()[measured.first.size / 2]
-        return Page(width, height, normalised, measured.first, thr, lineHeight, mid, measured.second, template)
+        return Page(width, height, normalised, measured.first, thr, rowHeight(measured.second, lineHeight), mid, measured.second, template)
     }
 
     /**
@@ -214,21 +220,41 @@ object InkSegmenter {
             }
             val heights = row.map { it.h }.sorted()
             val median = heights[heights.size / 2].toFloat()
-            // the x-height is the typical height of the *small* letters: the tallest 30 % of the
-            // crops (capitals, б/в, tail of "р") must not drag it up
-            val smallBand = heights.take(max(1, (heights.size * 0.65f).toInt()))
-            val xHeight = max(1f, smallBand[smallBand.size / 2].toFloat())
+            /*
+             * x-height of the row.
+             *
+             * The previous version took the lower 65 % of the crops and used their upper median,
+             * which on a real page measures the *dots and commas*: a line whose letters are 26 px tall
+             * produced an x-height of 14, so every letter came out 0.4-2.4 x-heights tall and the
+             * same "о" was drawn at three different sizes. A trimmed band around the median is far
+             * steadier - ascenders and descenders fall outside it, small letters stay inside.
+             */
+            val trimLo = (median * 0.62f)
+            val trimHi = (median * 1.25f)
+            val band = heights.filter { it >= trimLo && it <= trimHi }
+            val xHeight = max(1f, if (band.size >= 2) band[band.size / 2].toFloat() else median)
             val rowTop = row.minOf { it.y }.toFloat()
             val rowBottom = row.maxOf { it.y + it.h }.toFloat()
             val rowCentre = (rowTop + rowBottom) / 2f
-            // where the small letters sit vertically (their band centre is the baseline-ish middle)
-            val small = row.filter { it.h <= xHeight * 1.15f }
-            val bandCentre = if (small.isEmpty()) rowCentre else small.map { it.y + it.h / 2f }.average().toFloat()
+            /*
+             * The baseline of the row.
+             *
+             * centerRatio says "this letter sits above / below the small letters of its line", and it
+             * is measured in x-heights from the place the small letters *stand on*. Using the centre of
+             * the whole page (the old behaviour) meant a crop in the middle of the photo measured ~0 and
+             * one at the top or bottom measured +-8, so the renderer threw letters up and down: that is
+             * exactly the "jumping baseline" the user saw. The bottom of the small letters is stable.
+             */
+            val small = row.filter { it.h <= xHeight * 1.25f }
+            val baseline = if (small.isEmpty()) rowBottom else
+                small.map { it.y + it.h }.sorted()[small.size / 2].toFloat()
+            val bandCentre = baseline - xHeight / 2f
             val fixed = row.map { c ->
                 Crop(
                     c.x, c.y, c.w, c.h, c.tile, c.componentCount, ri,
                     sizeRatio = (c.h / xHeight).coerceIn(0.4f, 2.4f),
-                    centerRatio = ((c.y + c.h / 2f) - bandCentre) / xHeight
+                    centerRatio = ((c.y + c.h / 2f) - bandCentre) / xHeight,
+                    baseline = baseline
                 )
             }
             flat.addAll(fixed)
@@ -237,6 +263,58 @@ object InkSegmenter {
             check(median >= 0f)
         }
         return flat to out
+    }
+
+    /**
+     * Splits the crops of a page into writing lines.
+     *
+     * Rounding the crop's vertical centre to a bin of [lineHeight] (the old approach) puts the
+     * ascender of a "б" and the baseline of an "о" of the *same* line into different bins as soon as
+     * the estimate is a little off - and one handwritten line then comes out as three "rows", each
+     * with its own x-height. Rows are therefore built by walking the crops from top to bottom and
+     * attaching one to a row when its vertical centre is within half a line of that row's centre.
+     */
+    private fun groupRows(crops: List<Crop>, lineHeight: Float): List<List<Crop>> {
+        if (crops.isEmpty()) return emptyList()
+        val sorted = crops.sortedBy { it.y + it.h / 2f }
+        val rows = ArrayList<MutableList<Crop>>()
+        val centres = ArrayList<Float>()
+        for (c in sorted) {
+            val cy = c.y + c.h / 2f
+            var target = -1
+            for (i in rows.indices) if (abs(cy - centres[i]) <= lineHeight * 0.55f) { target = i; break }
+            if (target < 0) {
+                rows.add(mutableListOf(c))
+                centres.add(cy)
+            } else {
+                rows[target].add(c)
+                centres[target] = rows[target].map { it.y + it.h / 2f }.average().toFloat()
+            }
+        }
+        return rows.map { r -> r.sortedBy { it.x } }
+    }
+
+    /**
+     * The height of one line as it is actually written: the median ink height of the small letters,
+     * which is what the joins, the gap detection and the variant grouping all rely on.
+     */
+    private fun rowHeight(rows: List<List<Crop>>, fallback: Float): Float {
+        // The x-height is the typical height of the *small letters*, measured per row and then taken
+        // as a median across rows. A plain median over the whole page mixes in dots, commas and the
+        // many one-crop "rows" made of stray specks, and it came out half the real value (9 px for
+        // 20 px letters) - which is what made every glyph 2 x-heights tall on the page.
+        val perRow = rows.mapNotNull { row ->
+            val h = row.map { it.h }.sorted()
+            if (h.size < 3) null else {
+                val med = h[h.size / 2].toFloat()
+                val band = h.filter { it >= med * 0.62f && it <= med * 1.25f }
+                if (band.size >= 2) band[band.size / 2].toFloat() else med
+            }
+        }.sorted()
+        if (perRow.isNotEmpty()) return perRow[perRow.size / 2].coerceAtLeast(4f)
+        val small = rows.flatMap { r -> r.map { it.h } }.sorted()
+        if (small.isEmpty()) return fallback
+        return small[small.size / 2].toFloat().coerceAtLeast(4f)
     }
 
     private fun lineOf(c: Crop, lineHeight: Float): Int = ((c.y + c.h * 0.5f) / max(1f, lineHeight)).toInt()
@@ -449,13 +527,33 @@ object InkSegmenter {
         return out
     }
 
+    /**
+     * Rough height of one writing line, used to group crops into rows *before* the rows are measured.
+     *
+     * Averaging the "big" components is wrong on a real page: dots, commas and specks pull the median
+     * down, so almost everything looks "big" and the estimate explodes (a page with 30-px lines was
+     * measured at 114 px, which then split every row in three). The modal height of the components is
+     * a much steadier estimate - handwriting produces many components of the same x-height - so the
+     * mode is used, made robust by only considering component heights above the noise floor.
+     */
     private fun estimateLineHeight(comps: List<Box>, pageHeight: Int): Float {
         if (comps.isEmpty()) return pageHeight / 10f
         val heights = comps.map { it.h }.sorted()
-        val median = heights[heights.size / 2]
-        val big = heights.filter { it > median * 1.5 }
-        val base = if (big.isNotEmpty()) big.average().toFloat() else median.toFloat()
-        return base.coerceIn(8f, pageHeight / 2f)
+        val median = heights[heights.size / 2].toFloat()
+        // the mode of a coarsely binned histogram, restricted to plausible letter heights
+        val lo = max(3, (median * 0.5f).toInt())
+        val hi = (median * 2.0f).toInt().coerceAtLeast(lo + 1)
+        val bins = IntArray(max(1, hi - lo + 1))
+        for (hgt in heights) if (hgt in lo..hi) bins[hgt - lo]++
+        var bestBin = 0
+        for (i in bins.indices) if (bins[i] > bins[bestBin]) bestBin = i
+        val modal = (lo + bestBin).toFloat()
+        // Blend, but lean on the *median*, not the mode: a page has far more small letters than
+        // ascenders, and the mode is easily dragged down by dots, commas and specks of dirt. (A real
+        // page came out with an x-height of 9 px for lines whose letters are 20 px tall, which made
+        // every letter 2 x-heights tall and put the baseline in the wrong place.)
+        val base = if (modal > 0f) (modal * 0.35f + median * 0.65f) else median
+        return base.coerceIn(6f, pageHeight / 3f)
     }
 
     /**
@@ -640,6 +738,9 @@ object InkSegmenter {
      * the network was trained on tiles whose ink saturates at 1.0. Stretching the contrast of each
      * crop (and a mild gamma to make the stroke solid) raises recognition accuracy a lot.
      */
+    /** Ink threshold used by [segment] for a given mask; later stages must use the same one. */
+    fun inkThreshold(mask: FloatArray): Float = max(0.35f, InkMask.percentile(mask, 0.98f) * 0.45f)
+
     fun normaliseContrast(tile: FloatArray): FloatArray {
         var max = 0f
         for (v in tile) if (v > max) max = v

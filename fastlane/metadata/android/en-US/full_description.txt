@@ -1,0 +1,20 @@
+HandWrite turns your own handwriting into a font, on the device, without the network.
+
+* Take one to five photos of a page you wrote.
+* The app finds the letters, learns their shapes and builds a handwriting atlas.
+* Type any text (Russian or English) and the app lays it out the way you write: slanted, joined
+  letters, pen pressure, slight wobble.
+* Export A5 PDF and print, share or keep it.
+
+Everything is computed on the phone with classic computer vision and a 94 KiB neural network.
+The app has no INTERNET permission.
+
+Features:
+* no template sheets required - ordinary notes work;
+* cursive joins follow the actual pen movement of your letters;
+* several variants of every letter, alternated automatically;
+* ligatures for pairs you wrote joined together;
+* English words are learned even on a Russian page, and vice versa;
+* PDF export is vector, so it prints cleanly at any size.
+
+Open source, GPL-3.0, no trackers, no ads, no telemetry.

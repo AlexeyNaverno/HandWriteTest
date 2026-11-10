@@ -33,6 +33,7 @@ import com.handwrite.core.handwriting.AlphabetAligner
 import com.handwrite.core.handwriting.GlyphAtlas
 import com.handwrite.core.handwriting.GlyphRecognizer
 import com.handwrite.core.handwriting.InkSegmenter
+import com.handwrite.core.handwriting.LetterSplitter
 import com.handwrite.core.layout.HandLayout
 import com.handwrite.core.layout.LayoutResult
 import com.handwrite.core.model.PaperSize
@@ -701,6 +702,7 @@ class MainActivity : Activity() {
                     // plain page: keep only crops the network is confident about
                     val full: List<List<GlyphRecognizer.Guess>> = resolveScripts(pageGuesses, page)
                     var accepted = 0
+                    val splitPairs = ArrayList<LetterSplitter.Split>()
                     for ((i, crop) in page.crops.withIndex()) {
                         if (i % 8 == 0) {
                             val frac = i.toFloat() / maxOf(1, page.crops.size)
@@ -710,6 +712,39 @@ class MainActivity : Activity() {
                         }
                         val gs = full[i]
                         val best = gs.firstOrNull() ?: continue
+                        // A wide crop is often two letters the writer joined. Learning it as one
+                        // letter would put a two-letter blob into the atlas, so it is cut first; the
+                        // halves are learned as letters, and the pair is remembered as a ligature
+                        // because that crop is literally a photograph of that join.
+                        if (crop.w > page.lineHeight * LetterSplitter.MIN_ASPECT) {
+                            val split = LetterSplitter.split(crop, page, page.ink, page.width, page.height) { tile ->
+                                val gg = recognizer.classifyTile(tile).firstOrNull()
+                                if (gg == null) 0 to 0f else gg.codePoint to gg.score
+                            }
+                            if (split != null) {
+                                val labelA = recognizer.classifyTile(split.first.tile).firstOrNull()
+                                val labelB = recognizer.classifyTile(split.second.tile).firstOrNull()
+                                val ea = HandAssets.embedder(this)?.embed(split.first.tile)
+                                val eb = HandAssets.embedder(this)?.embed(split.second.tile)
+                                if (labelA != null && labelB != null && ea != null && eb != null) {
+                                    for ((half, lab, emb) in listOf(
+                                        Triple(split.first, labelA, ea),
+                                        Triple(split.second, labelB, eb)
+                                    )) {
+                                        newAtlas.add(
+                                            GlyphAtlas.Sample(
+                                                lab.codePoint, half.tile, emb, lab.score, half.aspect,
+                                                pageIdx, half.x.toFloat(), half.y.toFloat(),
+                                                crop.sizeRatio, crop.centerRatio
+                                            )
+                                        )
+                                        accepted++
+                                    }
+                                    splitPairs.add(split)
+                                    continue
+                                }
+                            }
+                        }
                         val second = gs.getOrNull(1)
                         val margin = if (second == null) 1f else best.score - second.score
                         val emb = HandAssets.embedder(this)?.embed(crop.tile) ?: continue
@@ -752,7 +787,33 @@ class MainActivity : Activity() {
                         )
                         if (newAtlas.add(sample)) accepted++
                     }
-                    report.append("Страница ${pageIdx + 1}: найдено ${page.crops.size}, принято $accepted букв\n")
+                    // The joins the writer actually made: the pairs that were cut out of one crop were
+                    // written without lifting the pen, so the pair itself becomes a ligature glyph.
+                    var ligatures = 0
+                    run {
+                        val embedder = HandAssets.embedder(this) ?: null
+                        for (split in splitPairs) {
+                            val la = recognizer.classifyTile(split.first.tile).firstOrNull() ?: continue
+                            val lb = recognizer.classifyTile(split.second.tile).firstOrNull() ?: continue
+                            if (split.score < 0.6f) continue
+                            val x0 = minOf(split.first.x, split.second.x)
+                            val x1 = maxOf(split.first.x + split.first.w, split.second.x + split.second.w)
+                            val y0 = minOf(split.first.y, split.second.y)
+                            val y1 = maxOf(split.first.y + split.first.h, split.second.y + split.second.h)
+                            val box = InkSegmenter.Box(x0, y0, x1, y1)
+                            val tile = InkSegmenter.cropTile(page.ink, page.width, page.height, box)
+                            val e = embedder?.embed(tile) ?: continue
+                            val pair = String(Character.toChars(la.codePoint)) + String(Character.toChars(lb.codePoint))
+                            val aspect = (x1 - x0).toFloat() / kotlin.math.max(1f, (y1 - y0).toFloat())
+                            if (newAtlas.addLigature(pair, tile, e, split.score, aspect, pageIdx, split.first.sizeRatio, split.first.centerRatio)) {
+                                ligatures++
+                            }
+                        }
+                    }
+                    report.append(
+                        "Страница ${pageIdx + 1}: найдено ${page.crops.size}, принято $accepted букв" +
+                            (if (ligatures > 0) ", лигатур $ligatures" else "") + "\n"
+                    )
                 }
                 handler.post {
                     bar?.progress = 92

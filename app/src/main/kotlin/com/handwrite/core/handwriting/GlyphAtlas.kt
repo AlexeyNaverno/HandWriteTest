@@ -46,6 +46,63 @@ class GlyphAtlas(
 
     val samples = ArrayList<Sample>()
 
+    /**
+     * Ligatures the user actually wrote: two letters touching on the page, stored as one glyph.
+     *
+     * Cyrillic cursive makes "ст", "но", "ое", "ми", "ши" flow into each other, and those joins are
+     * the ones a font cannot fake with a generic connector. When two neighbouring letters on a photo
+     * touch, their ink is cropped together and stored here under the pair ("ст"); the layout engine
+     * then substitutes the pair for one glyph, exactly like `liga` in a real font.
+     */
+    private val ligatures = HashMap<String, Int>()
+
+    fun ligatureCount(): Int = ligatures.size
+
+    /** pair text -> code point used as the glyph id, or 0 when the user never wrote that pair */
+    /** Rebuilds the pair -> code mapping when an atlas is read from a file. */
+    fun restoreLigature(first: Int, second: Int, code: Int) {
+        val pair = String(Character.toChars(first)) + String(Character.toChars(second))
+        ligatures[pair] = code
+    }
+
+    fun ligatureCode(pair: String): Int = ligatures[pair] ?: 0
+
+    fun ligaturePairs(): Set<String> = ligatures.keys
+
+    /**
+     * Stores a two-letter crop. The code point is allocated from a private range so that all the
+     * existing machinery (metrics, vectorisation, pen strokes, variant picking, the codec) works on
+     * ligatures without a single special case.
+     */
+    fun addLigature(pair: String, tile: FloatArray, embedding: FloatArray, confidence: Float, aspect: Float, sourcePage: Int, sizeRatio: Float, centerRatio: Float): Boolean {
+        // exactly two letters: a space, a digit or a stray "?" is never a join somebody wrote
+        if (pair.codePointCount(0, pair.length) != 2) return false
+        if (!Character.isLetter(pair.codePointAt(0))) return false
+        if (!Character.isLetter(pair.codePointAt(pair.offsetByCodePoints(0, 1)))) return false
+        val existing = ligatures[pair]
+        if (existing != null) {
+            val list = byCode[existing] ?: ArrayList()
+            if (list.size >= 2) return false      // two shapes of a pair are plenty
+        }
+        val code = existing ?: (LIGATURE_BASE + ligatures.size)
+        if (existing == null) ligatures[pair] = code
+        add(Sample(code, tile, embedding, confidence, aspect, sourcePage, 0f, 0f, sizeRatio, centerRatio))
+        return true
+    }
+
+    private val metricsCache = HashMap<Sample, GlyphNormalizer.Metrics>()
+
+    /**
+     * Normalised metrics of a sample: how tall the letter is in x-heights and where it sits relative
+     * to the baseline. Derived from the raw page measurements (see [GlyphNormalizer]), so one "о" from
+     * the top of a page and another from the bottom end up the same size.
+     */
+    fun metricsOf(sample: Sample): GlyphNormalizer.Metrics = synchronized(metricsCache) {
+        metricsCache.getOrPut(sample) {
+            GlyphNormalizer.metrics(sample.sizeRatio, sample.centerRatio, sample.codePoint)
+        }
+    }
+
     private val byCode = HashMap<Int, MutableList<Sample>>()
 
     /** measured letter height (ascender) relative to the em square, from the user's writing */
@@ -129,6 +186,16 @@ class GlyphAtlas(
         }
     }
 
+    /**
+     * How far above the baseline the *centre* of the ink box sits, in x-heights.
+     * A small letter is centred at half an x-height; an ascender keeps its top above the x-height and
+     * a descender its tail below the baseline, which is what makes "б" and "д" look like themselves.
+     */
+    private fun baselineShift(sample: Sample): Float {
+        val m = metricsOf(sample)
+        return (m.top + m.bottom) / 2f
+    }
+
     fun hasCode(codePoint: Int): Boolean = (byCode[codePoint]?.isNotEmpty() == true)
 
     fun letterCount(): Int = byCode.count { it.value.isNotEmpty() }
@@ -153,8 +220,12 @@ class GlyphAtlas(
         val list = variants(codePoint)
         if (list.isEmpty()) return null
         if (list.size == 1) return list[0]
-        val idx = (positionSeed * 2654435761L).let { ((it ushr 8) and 0x7FFFFFFF).toInt() } % list.size
-        return list[idx]
+        // A hash of the *position* gives a stable but unpredictable choice. Variants are ordered by
+        // confidence, so the hash is spread over the list instead of always taking the best one -
+        // and because the seed differs between the two "о" of "молоко", the copies differ too.
+        val h = (positionSeed.toLong() * 2654435761L) xor (positionSeed.toLong() shl 13)
+        val mixed = (h xor (h ushr 29)).let { ((it and 0x7FFFFFFFL)) }
+        return list[(mixed % list.size).toInt()]
     }
 
     /**
@@ -180,7 +251,7 @@ class GlyphAtlas(
          * margin.
          */
         val xHeight = em * X_HEIGHT_RATIO
-        val growth = sample.sizeRatio.coerceIn(0.55f, 2.2f)
+        val growth = metricsOf(sample).height.coerceIn(0.55f, 2.2f)
         val s = xHeight * growth / INK_PIXELS
         var xmin = Float.MAX_VALUE
         for (c in contours) {
@@ -190,7 +261,7 @@ class GlyphAtlas(
         if (xmin == Float.MAX_VALUE) xmin = TileRasterizer.SIZE / 2f
         val lsb = em * 0.02f
         val e = lsb - xmin * s
-        val centre = xHeight / 2f - sample.centerRatio.coerceIn(-1.5f, 1.5f) * xHeight
+        val centre = xHeight / 2f - baselineShift(sample) * xHeight
         val f = centre + (TileRasterizer.SIZE / 2f) * s
         // tile space is y-down, font space is y-up
         val m = M2x3(a = s, d = -s, e = e, f = f)
@@ -247,7 +318,7 @@ class GlyphAtlas(
         val start = pen.start ?: return null
         val end = pen.end ?: return null
         val xHeight = unitsPerEm * X_HEIGHT_RATIO
-        val growth = sample.sizeRatio.coerceIn(0.5f, 2.4f)
+        val growth = metricsOf(sample).height.coerceIn(0.55f, 2.2f)
         val inkScale = xHeight * growth / INK_PIXELS * (64f / 58f)
         val contours = TileVectorizer.vectorize(sample.tile, TileRasterizer.SIZE)
         var xmin = TileRasterizer.SIZE / 2f
@@ -257,7 +328,7 @@ class GlyphAtlas(
         }
         // the pen path lives on the same 64x64 tile, so the same mapping applies
         val lsb = unitsPerEm * 0.035f
-        val centre = xHeight / 2f - sample.centerRatio.coerceIn(-1.5f, 1.5f) * xHeight
+        val centre = xHeight / 2f - baselineShift(sample) * xHeight
         fun fx(x: Float) = lsb + (x * TileRasterizer.SIZE - xmin) * inkScale
         fun fy(y: Float) = centre - (y * TileRasterizer.SIZE - TileRasterizer.SIZE / 2f) * inkScale
         val ed = pen.entryDir
@@ -286,6 +357,9 @@ class GlyphAtlas(
     }
 
     companion object {
+        /** first code point reserved for ligature glyphs (private use area) */
+        const val LIGATURE_BASE = 0xE000
+
         /** height of the small letters (x-height) as a fraction of the em square */
         const val X_HEIGHT_RATIO = 0.5f
 
@@ -486,15 +560,33 @@ class AtlasGlyphSource(
     override val usesEvenOddFill: Boolean
         get() = atlas.sampleCount() > 0
 
-    override fun path(gid: Int, coords: Map<String, Float>): GlyphPath {
+    override fun path(gid: Int, coords: Map<String, Float>): GlyphPath =
+        pathAt(gid, coords, gid * 31 + coords.hashCode())
+
+    /**
+     * @param variantSeed position of this glyph in the text; different seeds pick different variants
+     *   of the same letter, which is what removes the "stamped copies" look.
+     */
+    override fun pathAt(gid: Int, coords: Map<String, Float>, variantSeed: Int): GlyphPath {
         if (isFallback(gid)) {
             val f = fallback!!
             val g = f.gid(gid - FALLBACK_BASE)
             if (g != 0) return f.path(g, coords)
         }
-        val sample = atlas.pick(gid, gid * 31 + coords.hashCode())
+        val sample = atlas.pick(gid, variantSeed)
         if (sample != null) return atlas.pathOf(sample, unitsPerEm.toFloat())
         return GlyphPath.of(emptyList())
+    }
+
+    /** the variant that [pathAt] would return, so joins and strokes follow the same choice */
+    fun sampleAt(gid: Int, variantSeed: Int): GlyphAtlas.Sample? =
+        if (isFallback(gid)) null else atlas.pick(gid, variantSeed)
+
+    /** advance of the variant that will actually be drawn at this position */
+    fun advanceAt(gid: Int, variantSeed: Int): Int {
+        if (isFallback(gid)) return advance(gid)
+        val sample = atlas.pick(gid, variantSeed) ?: return unitsPerEm / 2
+        return atlas.advanceFor(sample, unitsPerEm.toFloat()).toInt()
     }
 
     companion object {
@@ -516,5 +608,11 @@ class AtlasGlyphSource(
         return atlas.flowInFontUnits(sample, path)
     }
 
-    override fun isLetterGlyph(cp: Int, gid: Int): Boolean = Character.isLetter(cp)
+    override fun ligatureGid(first: Int, second: Int): Int {
+        val pair = String(Character.toChars(first)) + String(Character.toChars(second))
+        val code = atlas.ligatureCode(pair)
+        return if (code != 0) code else 0
+    }
+
+    override fun isLetterGlyph(cp: Int, gid: Int): Boolean = Character.isLetter(cp) || gid >= GlyphAtlas.LIGATURE_BASE
 }

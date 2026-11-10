@@ -234,10 +234,48 @@ class PageView(context: Context) : View(context) {
     }
 
     private fun drawGlyph(canvas: Canvas, g: com.handwrite.core.layout.PlacedGlyph, ink: Int, density: Float) {
+        val pen = g.penStrokes
+        if (pen != null) {
+            for (st in pen) drawPenStroke(canvas, st, ink, density)
+            return
+        }
         fill.color = ink
         fill.alpha = (255 * density.coerceIn(0.15f, 1f)).toInt()
         fill.style = Paint.Style.FILL
         canvas.drawPath(pathFor(g), fill)
+    }
+
+    /** one reconstructed pen movement drawn as a ribbon (learned letters) */
+    private fun drawPenStroke(canvas: Canvas, st: com.handwrite.core.layout.PenStroke, ink: Int, density: Float) {
+        val n = st.widths.size
+        if (n < 2) return
+        val path = Path()
+        val left = FloatArray(n * 2)
+        val right = FloatArray(n * 2)
+        for (i in 0 until n) {
+            val x = st.points[i * 2]
+            val y = st.points[i * 2 + 1]
+            val i0 = if (i > 0) i - 1 else i
+            val i1 = if (i < n - 1) i + 1 else i
+            var tx = st.points[i1 * 2] - st.points[i0 * 2]
+            var ty = st.points[i1 * 2 + 1] - st.points[i0 * 2 + 1]
+            val len = Math.hypot(tx.toDouble(), ty.toDouble()).toFloat().coerceAtLeast(1e-4f)
+            tx /= len
+            ty /= len
+            val w = st.widths[i] / 2f
+            left[i * 2] = x - ty * w
+            left[i * 2 + 1] = y + tx * w
+            right[i * 2] = x + ty * w
+            right[i * 2 + 1] = y - tx * w
+        }
+        path.moveTo(left[0], left[1])
+        for (i in 1 until n) path.lineTo(left[i * 2], left[i * 2 + 1])
+        for (i in n - 1 downTo 0) path.lineTo(right[i * 2], right[i * 2 + 1])
+        path.close()
+        fill.style = Paint.Style.FILL
+        fill.color = ink
+        fill.alpha = (255 * (density * st.density).coerceIn(0.2f, 1f)).toInt()
+        canvas.drawPath(path, fill)
     }
 
     private fun drawConnector(canvas: Canvas, c: Connector, ink: Int, style: TextStyle) {

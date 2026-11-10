@@ -39,9 +39,15 @@ RESCOMP="$OUT/res"
 rm -rf "$OUT"
 mkdir -p "$CLASSES" "$DEX" "$RESCOMP" "$OUT/gen"
 
-VERSION_NAME="0.0.2"
-VERSION_CODE="2"
-APP_ID="com.handwrite.app"
+# Version and application id are the single source of truth in app/build.gradle.kts; the script reads
+# them from there so the Gradle build (used by CI and F-Droid) and this script cannot drift apart.
+APP_GRADLE="app/build.gradle.kts"
+APP_ID="$(grep -oP 'applicationId\s*=\s*"\K[^"]+' "$APP_GRADLE" | head -1)"
+VERSION_NAME="$(grep -oP 'versionName\s*=\s*"\K[^"]+' "$APP_GRADLE" | head -1)"
+VERSION_CODE="$(grep -oP 'versionCode\s*=\s*\K[0-9]+' "$APP_GRADLE" | head -1)"
+APP_ID="${APP_ID:-com.handwrite.app}"
+VERSION_NAME="${VERSION_NAME:-0.1.0}"
+VERSION_CODE="${VERSION_CODE:-1}"
 
 echo "==> 1/7 compile Kotlin"
 SRC_DIRS=("app/src/main/kotlin")
@@ -64,9 +70,13 @@ find "$CLASSES" -name '*.class' > "$OUT/classes.txt"
 echo "==> 3/7 resources (aapt2)"
 "$BUILD_TOOLS/aapt2" compile --dir app/src/main/res -o "$RESCOMP/res.zip"
 MANIFEST="$OUT/gen/AndroidManifest.xml"
+# AGP 8 forbids a package attribute in the source manifest, but plain aapt2 still needs one, so the
+# package is injected into the copy aapt2 sees.
 sed -e "s/android:versionName=\"[^\"]*\"/android:versionName=\"$VERSION_NAME\"/" \
     -e "s/android:versionCode=\"[^\"]*\"/android:versionCode=\"$VERSION_CODE\"/" \
+    -e "s|<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"|<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"$APP_ID\"|" \
     app/src/main/AndroidManifest.xml > "$MANIFEST"
+grep -q 'package=' "$MANIFEST" || sed -i "1a\\    package=\"$APP_ID\"" "$MANIFEST"
 "$BUILD_TOOLS/aapt2" link -o "$OUT/base.apk" \
   -I "$PLATFORM" --manifest "$MANIFEST" \
   --min-sdk-version 23 --target-sdk-version 34 \

@@ -93,6 +93,12 @@ object PdfPageComposer {
     }
 
     fun drawGlyph(c: PdfCanvas, g: PlacedGlyph, ink: Int) {
+        // learned letters: the pen trajectory extruded with its own width profile
+        val pen = g.penStrokes
+        if (pen != null) {
+            for (st in pen) drawPenStroke(c, st, ink, g.density)
+            return
+        }
         c.setFillRgb(ink)
         c.setAlpha(g.density.coerceIn(0.15f, 1f))
         var first = true
@@ -125,6 +131,45 @@ object PdfPageComposer {
         }
         if (!first) c.close()
         if (g.evenOdd) c.fillEvenOdd() else c.fill()
+    }
+
+    /**
+     * Draws one reconstructed pen movement as a filled ribbon.
+     *
+     * The ribbon is built the same way as a connective stroke: walk the polyline, offset both sides by
+     * half the pen width at each point, close the outline and fill it. Unioning the ribbons of all the
+     * strokes of a letter (and of the joins) gives a shape that looks drawn, because the thickness
+     * really does follow the pen.
+     */
+    fun drawPenStroke(c: PdfCanvas, st: com.handwrite.core.layout.PenStroke, ink: Int, density: Float) {
+        val n = st.widths.size
+        if (n < 2) return
+        val left = FloatArray(n * 2)
+        val right = FloatArray(n * 2)
+        for (i in 0 until n) {
+            val x = st.points[i * 2]
+            val y = st.points[i * 2 + 1]
+            // tangent from the neighbours, so the ribbon stays smooth at the ends too
+            val i0 = maxOf(0, i - 1)
+            val i1 = minOf(n - 1, i + 1)
+            var tx = st.points[i1 * 2] - st.points[i0 * 2]
+            var ty = st.points[i1 * 2 + 1] - st.points[i0 * 2 + 1]
+            val len = kotlin.math.sqrt(tx * tx + ty * ty).coerceAtLeast(1e-4f)
+            tx /= len
+            ty /= len
+            val w = st.widths[i] / 2f
+            left[i * 2] = x - ty * w
+            left[i * 2 + 1] = y + tx * w
+            right[i * 2] = x + ty * w
+            right[i * 2 + 1] = y - tx * w
+        }
+        c.setFillRgb(ink)
+        c.setAlpha((density * st.density).coerceIn(0.2f, 1f))
+        c.moveTo(left[0], left[1])
+        for (i in 1 until n) c.lineTo(left[i * 2], left[i * 2 + 1])
+        for (i in n - 1 downTo 0) c.lineTo(right[i * 2], right[i * 2 + 1])
+        c.close()
+        c.fillNonZero()
     }
 
     /** Connective pen stroke: a cubic ribbon whose width follows the pen pressure. */

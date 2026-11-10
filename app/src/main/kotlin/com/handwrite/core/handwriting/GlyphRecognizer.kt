@@ -112,8 +112,10 @@ class GlyphRecognizer(
         val emb = embedder.embed(crop.tile)
         val top = crop.y.toFloat()
         val bottom = (crop.y + crop.h).toFloat()
-        val mid = line.midline
+        // the baseline of *this crop's line*: using the middle of the page made every letter in the
+        // top or bottom rows look like an ascender or a descender
         val lh = line.lineHeight
+        val mid = if (crop.baseline > 0f) crop.baseline - lh / 2f else line.midline
         val isTall = (mid - top) > lh * 0.42f          // reaches into the ascender band
         val isDeep = (bottom - mid) > lh * 0.32f       // goes below the baseline
         val scores = HashMap<Int, Float>()

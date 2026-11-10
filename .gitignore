@@ -1,5 +1,8 @@
 # build output
 build/
+app/build/
+.gradle/
+local.properties
 !build/dev/*.kt
 !build/dev/*.py
 !build/dev/README.md
@@ -8,16 +11,6 @@ build/
 *.dex
 *.class
 *.jar
-*.bin
-
-# python tooling
+# the Gradle wrapper jar is a checked-in binary by design
+!gradle/wrapper/gradle-wrapper.jar
 __pycache__/
-*.pyc
-.venv/
-
-# local experiments
-/tmp/
-*.gray
-
-# release artifact is shipped on purpose
-!dist/*.apk
