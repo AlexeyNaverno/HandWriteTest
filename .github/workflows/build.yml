@@ -23,14 +23,23 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # wait for the licenses to be accepted, otherwise "yes | sdkmanager --licenses" races the
+          # setup action and the step fails with a bare exit code
+          log-accepted-android-sdk-licenses: false
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.10.2"
 
+      - name: Accept Android SDK licenses
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
       - name: Build release APK
-        run: gradle --no-daemon assembleRelease
+        run: gradle --no-daemon assembleRelease --stacktrace
 
       - name: Name the artifact
         run: |
