@@ -13,3 +13,4 @@ local.properties
 *.jar
 # the Gradle wrapper jar is a checked-in binary by design
 !gradle/wrapper/gradle-wrapper.jar
+__pycache__/
