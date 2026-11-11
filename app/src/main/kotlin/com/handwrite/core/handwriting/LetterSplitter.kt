@@ -1,7 +1,5 @@
 package com.handwrite.core.handwriting
 
-import com.handwrite.core.handwriting.TileRasterizer.SIZE
-import kotlin.math.max
 
 /**
  * Cuts a crop that turned out to be **two letters** into those two letters.
@@ -134,7 +132,4 @@ object LetterSplitter {
 
     private fun isCyrillic(cp: Int): Boolean = cp in 0x0400..0x04FF
 
-    /** x-height estimate for a crop height, used by callers that only have the crop */
-    fun halfHeightOk(cropHeight: Int, lineHeight: Float): Boolean =
-        cropHeight >= max(4f, lineHeight * 0.5f)
 }

@@ -2,9 +2,10 @@ name: Build APK
 
 on:
   push:
+    branches: ["**"]
     tags: ["v*"]
-  workflow_dispatch:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,8 +22,21 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # The runner image ships an Android SDK, so it is configured directly instead of through a
+      # third-party setup action: fewer moving parts, and F-Droid maintainers can read exactly what
+      # the build needs. The toolchain is pinned here and in gradle/wrapper/gradle-wrapper.properties.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "sdk.dir=$SDK" > local.properties
+          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SM" ]; then SM="$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)"; fi
+          echo "sdkmanager: $SM"
+          yes | "$SM" --licenses > /dev/null || true
+          "$SM" --install "platforms;android-34" "build-tools;34.0.0" > /dev/null
+          ls "$SDK/platforms" "$SDK/build-tools"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -30,7 +44,29 @@ jobs:
           gradle-version: "8.10.2"
 
       - name: Build release APK
-        run: gradle --no-daemon assembleRelease
+        run: |
+          set -o pipefail
+          gradle --no-daemon assembleRelease --stacktrace --console=plain 2>&1 | tee build.log
+
+      - name: Run unit tests
+        run: gradle --no-daemon testDebugUnitTest --stacktrace --console=plain
+
+      # Logs of a failed run are not always reachable from outside; annotations are. Put the lines
+      # that explain the failure into error annotations and the summary, so a red run is diagnosable
+      # from the API alone.
+      - name: Report build failure
+        if: failure()
+        run: |
+          grep -nE "^(e: |FAILURE|\* What went wrong|Execution failed|Caused by)" -A 8 build.log 2>/dev/null | head -80 || true
+          {
+            echo "### Build log tail"
+            echo '```'
+            tail -60 build.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^e: |What went wrong|Execution failed|Caused by" build.log 2>/dev/null | head -20 | while IFS= read -r line; do
+            echo "::error title=gradle::$line"
+          done
 
       - name: Name the artifact
         run: |
@@ -46,6 +82,35 @@ jobs:
         with:
           name: apk
           path: out/*
+
+      # A tag build also commits its APK to dist/, so that the download link in the README matches the
+      # newest release without anybody having to touch the repository by hand.
+      - name: Publish APK to dist/
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Only a tag build publishes to dist/. A per-commit build would either need a name nobody
+          # downloads, or would overwrite the APK the README links to on every commit - so ordinary
+          # pushes just leave the APK attached to the run.
+          VERSION="$(basename out/*.apk | sed 's/^handwrite-//; s/\.apk$//')"
+          cp "out/handwrite-$VERSION.apk" dist/
+          # the checksum file is rewritten so it points at dist/, not at out/: people who download
+          # both files from the repository must be able to verify them with plain "sha256sum -c"
+          ( cd dist && sha256sum "handwrite-$VERSION.apk" > "handwrite-$VERSION.apk.sha256" )
+          git add dist/*.apk dist/*.sha256
+          if git diff --cached --quiet; then echo "dist/ already up to date"; exit 0; fi
+          git commit -m "dist: APK $VERSION from ${GITHUB_SHA::7}"
+          # a tag build runs on a detached HEAD, so the commit is pushed to the default branch
+          # explicitly; retries cover the case where main moved while the build was running
+          for i in 1 2 3; do
+            git push origin HEAD:main && exit 0
+            git fetch origin main
+            git rebase origin/main || git rebase --abort
+            sleep 5
+          done
+          exit 1
 
       - name: Attach APK to the release
         if: startsWith(github.ref, 'refs/tags/v')
