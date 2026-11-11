@@ -83,14 +83,17 @@ jobs:
           name: apk
           path: out/*
 
-      # The APK is also committed to dist/ so that the download link in the README always matches the
-      # newest build without anybody having to touch the repository by hand.
+      # A tag build also commits its APK to dist/, so that the download link in the README matches the
+      # newest release without anybody having to touch the repository by hand.
       - name: Publish APK to dist/
-        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Only a tag build publishes to dist/. A per-commit build would either need a name nobody
+          # downloads, or would overwrite the APK the README links to on every commit - so ordinary
+          # pushes just leave the APK attached to the run.
           VERSION="$(basename out/*.apk | sed 's/^handwrite-//; s/\.apk$//')"
           cp "out/handwrite-$VERSION.apk" dist/
           # the checksum file is rewritten so it points at dist/, not at out/: people who download
