@@ -24,12 +24,14 @@ android {
 
     sourceSets {
         getByName("main") {
-            // non-standard layout: sources live in app/src/main/kotlin, everything else is default
+            // Sources live in kotlin/ rather than java/; setting the directory is enough - the Kotlin
+            // plugin picks up every *.kt in it. (An include pattern here is not supported by the
+            // Android source-set API and fails the build.)
             java.setSrcDirs(listOf("src/main/kotlin"))
-            java.includes.add("**/*.kt")
-            res.setSrcDirs(listOf("src/main/res"))
-            assets.setSrcDirs(listOf("src/main/assets"))
-            manifest.srcFile("src/main/AndroidManifest.xml")
+        }
+        getByName("test") {
+            // unit tests sit next to the code they test, in kotlin/ as well
+            java.setSrcDirs(listOf("src/test/kotlin"))
         }
     }
 
