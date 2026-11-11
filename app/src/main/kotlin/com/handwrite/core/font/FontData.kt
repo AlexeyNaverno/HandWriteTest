@@ -865,7 +865,13 @@ class FontData(val bytes: ByteArray) {
         if (sets.isEmpty()) return gids
         var i = 0
         while (i < gids.size) {
-            val cands = sets[gids[i]] ?: run { i++; continue }
+            // plain when/else rather than continue-inside-run: that is an experimental Kotlin feature
+            // in this language version, and the Gradle build must not need opt-in flags
+            val cands = sets[gids[i]]
+            if (cands == null) {
+                i++
+                continue
+            }
             var matched = false
             for ((comps, ligGid) in cands.sortedByDescending { it.first.size }) {
                 if (i + comps.size > gids.size - 1) continue

@@ -59,6 +59,16 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        /*
+         * Pin the language version to the one the shipped Kotlin plugin provides.
+         *
+         * Not cosmetic: the source was developed against a newer compiler locally, and one construct it
+         * accepts ("break/continue inside an inline lambda") is still experimental for 2.0 - the build
+         * failed on exactly that. Pinning makes the local and the CI compiler agree, so a construct
+         * that compiles here cannot fail there, and the code stays free of experimental features.
+         */
+        languageVersion = "2.0"
+        apiVersion = "2.0"
     }
 
     packaging {
