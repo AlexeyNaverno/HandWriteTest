@@ -1,0 +1,55 @@
+Categories:
+  - Graphics
+  - Writing
+License: GPL-3.0-or-later
+AuthorName: Alexey Naverno
+SourceCode: https://github.com/AlexeyNaverno/HandWriteTest
+IssueTracker: https://github.com/AlexeyNaverno/HandWriteTest/issues
+Changelog: https://github.com/AlexeyNaverno/HandWriteTest/releases
+
+AutoName: HandWrite
+Summary: Your own handwriting for any text, on the device
+Description: |-
+    Type any text and get it back in your own handwriting, laid out as a printable A5 PDF.
+
+    Take one to five photos of pages you wrote. The app finds the letters, reconstructs the pen
+    movement of every symbol (skeleton, stroke order, stroke width) and builds a handwriting font
+    from them. Then it sets any text the way you write: slanted, with joined letters, pen pressure
+    and a slight wobble, in Russian or English.
+
+    Everything happens on the phone with classic computer vision and a 94 KiB network trained from
+    open handwriting fonts. The app has no INTERNET permission and no trackers; the photos never
+    leave the device.
+
+    * no template sheets needed - ordinary notes work;
+    * joins follow the actual pen movement of your letters, and pairs you wrote joined become
+      ligatures;
+    * several variants of every letter, alternated automatically, so the page does not look stamped;
+    * vector PDF, so it prints cleanly at any size.
+
+RepoType: git
+Repo: https://github.com/AlexeyNaverno/HandWriteTest
+
+Builds:
+  - versionName: 0.1.1
+    versionCode: 5
+    # F-Droid wants the full commit hash, not a tag or a branch name, so that a release can always be
+    # rebuilt even if a tag is moved. This is the commit tag v0.1.1 points at.
+    commit: 0b8b477206b98f09333ec670a0e7857fdf49362f
+    # the Gradle project lives at the repository root; the module is :app
+    subdir: "."
+    gradle:
+      - yes
+    # the release APK is signed with the project key (see keystore/), which F-Droid replaces with its
+    # own signature; the path is where Gradle writes the unsigned output in an F-Droid build
+    output: app/build/outputs/apk/release/app-release-unsigned.apk
+
+# The release APKs on GitHub are signed with a project key so that users can update in place; F-Droid
+# builds and signs from source and never uses that key. The key in keystore/ is therefore only a
+# convenience for the GitHub releases - see keystore/README.md.
+AllowedAPKSigningKeys: 75e493e2415173b5e4c0567d8d4f1e3b28fb25e2190ffd9fec3d465a9b82b948
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 0.1.1
+CurrentVersionCode: 5
