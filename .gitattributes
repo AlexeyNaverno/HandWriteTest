@@ -1,0 +1,3 @@
+# APKs in dist/ are release artifacts committed on purpose; without this Git may treat them as
+# binary blobs with unclear diff behaviour in some clients.
+*.apk binary

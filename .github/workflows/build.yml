@@ -93,8 +93,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           VERSION="$(basename out/*.apk | sed 's/^handwrite-//; s/\.apk$//')"
           cp "out/handwrite-$VERSION.apk" dist/
-          cp "out/handwrite-$VERSION.apk.sha256" dist/
-          git add dist/
+          # the checksum file is rewritten so it points at dist/, not at out/: people who download
+          # both files from the repository must be able to verify them with plain "sha256sum -c"
+          ( cd dist && sha256sum "handwrite-$VERSION.apk" > "handwrite-$VERSION.apk.sha256" )
+          git add dist/*.apk dist/*.sha256
           if git diff --cached --quiet; then echo "dist/ already up to date"; exit 0; fi
           git commit -m "dist: APK $VERSION from ${GITHUB_SHA::7}"
           for i in 1 2 3; do
