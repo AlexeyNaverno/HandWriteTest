@@ -102,9 +102,12 @@ jobs:
           git add dist/*.apk dist/*.sha256
           if git diff --cached --quiet; then echo "dist/ already up to date"; exit 0; fi
           git commit -m "dist: APK $VERSION from ${GITHUB_SHA::7}"
+          # a tag build runs on a detached HEAD, so the commit is pushed to the default branch
+          # explicitly; retries cover the case where main moved while the build was running
           for i in 1 2 3; do
-            git push && exit 0
-            git pull --rebase
+            git push origin HEAD:main && exit 0
+            git fetch origin main
+            git rebase origin/main || git rebase --abort
             sleep 5
           done
           exit 1
