@@ -77,6 +77,18 @@ jobs:
             echo "::error title=trackers::a network/analytics library slipped into the dependencies"
             exit 1
           fi
+          # leave a readable trace in the run summary: what the app actually ships with
+          {
+            echo "### F-Droid checks"
+            echo "Runtime dependencies:"
+            echo '```'
+            grep -E "^[|\\+ ]*(\\+---|\\---) " deps.txt || echo "(none beyond the Kotlin stdlib)"
+            echo '```'
+            echo "Permissions:"
+            echo '```'
+            cat perms.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Logs of a failed run are not always reachable from outside; annotations are. Put the lines
       # that explain the failure into error annotations and the summary, so a red run is diagnosable
