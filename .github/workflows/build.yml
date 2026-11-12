@@ -205,3 +205,7 @@ jobs:
             echo "### Result"
             echo "${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
+          # Annotations are served through the API even when the job log and the run summary are not,
+          # so the actual list of dependencies and permissions is repeated here, one line per item.
+          echo "::notice title=runtime dependencies::$(grep -E "^[|\\+ ]*(\\+---|\\---) " deps.txt 2>/dev/null | sed "s/^[|\\+ -]*//" | paste -sd", " - || echo none)"
+          echo "::notice title=permissions::$(grep -c "uses-permission" perms.txt 2>/dev/null || echo 0) declared (0 expected)"
