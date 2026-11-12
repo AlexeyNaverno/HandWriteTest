@@ -51,6 +51,58 @@ jobs:
       - name: Run unit tests
         run: gradle --no-daemon testDebugUnitTest --stacktrace --console=plain
 
+      # F-Droid's hard requirements are cheap to check and expensive to notice late, so they are
+      # checked on every build: every dependency pinned to an exact version (an unpinned one is
+      # rejected outright), and no permission the store would object to - this app should have none.
+      - name: Check F-Droid requirements
+        run: |
+          set -e
+          echo "== resolved runtime dependencies"
+          gradle --no-daemon -q :app:dependencies --configuration releaseRuntimeClasspath | tee deps.txt
+          # every leaf line looks like "+--- group:artifact:version"; anything without a concrete
+          # version (a range, a "+", an unresolved "->") is what F-Droid refuses to build
+          if grep -E "^[|\\+ ]*(\\+---|\\---) " deps.txt | grep -vE ":[0-9]+(\\.[0-9]+)*([.-][A-Za-z0-9]+)*$" ; then
+            echo "::error title=pinning::a runtime dependency has no exact version (see the lines above)"
+            exit 1
+          fi
+          # the point of naming the stdlib explicitly is that nothing else pulls it in: a duplicate or
+          # a legacy jdk7/jdk8 artifact would mean the fix only looked like a fix
+          if grep -qE "kotlin-stdlib-jdk7|kotlin-stdlib-jdk8" deps.txt; then
+            echo "::error title=pinning::legacy kotlin-stdlib-jdk7/jdk8 is on the classpath (its classes live in kotlin-stdlib since 1.8)"
+            exit 1
+          fi
+          stdlib=$(grep -oE "kotlin-stdlib:[^ ]+" deps.txt | sort -u | wc -l)
+          echo "distinct kotlin-stdlib entries: $stdlib"
+          if [ "$stdlib" -ne 1 ]; then
+            echo "::error title=pinning::expected exactly one kotlin-stdlib version, found $stdlib"
+            exit 1
+          fi
+
+          echo "== permissions in the built APK"
+          AAPT="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/ | tail -1)aapt2"
+          "$AAPT" dump permissions app/build/outputs/apk/release/app-release-unsigned.apk | tee perms.txt
+          if grep -q "uses-permission" perms.txt; then
+            echo "::error title=permissions::the app declares permissions, F-Droid description says it needs none"
+            exit 1
+          fi
+          echo "== no trackers by construction: no INTERNET permission above, and no network libraries"
+          if grep -qiE "okhttp|retrofit|firebase|crashlytics|play-services|analytics" deps.txt; then
+            echo "::error title=trackers::a network/analytics library slipped into the dependencies"
+            exit 1
+          fi
+          # leave a readable trace in the run summary: what the app actually ships with
+          {
+            echo "### F-Droid checks"
+            echo "Runtime dependencies:"
+            echo '```'
+            grep -E "^[|\\+ ]*(\\+---|\\---) " deps.txt || echo "(none beyond the Kotlin stdlib)"
+            echo '```'
+            echo "Permissions:"
+            echo '```'
+            cat perms.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Logs of a failed run are not always reachable from outside; annotations are. Put the lines
       # that explain the failure into error annotations and the summary, so a red run is diagnosable
       # from the API alone.

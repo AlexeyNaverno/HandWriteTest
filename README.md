@@ -99,13 +99,20 @@ APK подписывается стабильным ключом `keystore/handw
 
 ## F-Droid
 
-- Репозиторий собирается **Gradle’ом** (wrapper 8.10.2, AGP 8.7.3, Kotlin 2.0.21), `./gradlew assembleRelease`.
-- Зависимостей нет вообще: ни AndroidX, ни сторонних библиотек — только Kotlin stdlib. Поэтому
-  сборка воспроизводима и не тянет несвободных компонентов.
-- Разрешений нет ни одного (фото выбираются через `ACTION_OPEN_DOCUMENT`); INTERNET отсутствует.
-- `versionCode`/`versionName` — в `app/build.gradle.kts`; метаданные магазина — в `fastlane/metadata/android/{en-US,ru-RU}`.
-- CI: `.github/workflows/build.yml` собирает APK на каждый тег `v*` и прикладывает его к релизу.
-  Обновление в F-Droid: `AutoUpdateMode: Version`, `UpdateCheckMode: Tags`.
+Приложение готово к магазину; всё, что требует F-Droid, лежит в репозитории.
+
+| Требование | Как выполнено |
+|---|---|
+| Лицензия | `LICENSE` — GPL-3.0-or-later, SPDX-заголовок и уведомление об авторстве |
+| Сборка из исходников | Gradle (wrapper 8.10.2, AGP 8.7.3, Kotlin 2.0.21), `./gradlew assembleRelease`, без предсобранных бинарей |
+| Версии зависимостей | всё закреплено: `kotlin-stdlib` назван явно с версией (плагин добавлял его без версии — ровно то, что магазин отклоняет), `stdlib-jdk7/8` не тянутся |
+| Разрешения | ни одного; INTERNET отсутствует, фото — через `ACTION_OPEN_DOCUMENT` |
+| Реклама/трекеры | нет и не может быть: нет разрешения на сеть |
+| Метаданные | `metadata/com.handwrite.app.yml` — готовый рецепт для `fdroiddata` (полный commit hash, `gradle: yes`, путь к APK, `AllowedAPKSigningKeys`, обновление по тегам) + `fastlane/metadata/android/{en-US,ru-RU}` |
+| Подпись | релизы на GitHub подписаны проектным ключом (чтобы ставились поверх); F-Droid собирает и подписывает сам — см. `keystore/README.md` |
+
+CI дополнительно **проверяет** два требования, которые легко сломать незаметно: закрепление версий
+(нет `stdlib-jdk7/8`, ровно одна версия stdlib) и отсутствие разрешений в собранном APK.
 
 ## Как получить хороший результат
 

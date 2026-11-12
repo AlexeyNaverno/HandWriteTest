@@ -1,9 +1,11 @@
 /*
  * Application module.
  *
- * Deliberately plain: no AndroidX, no third-party libraries, no code generation. Everything is
- * Kotlin on top of the platform SDK, which keeps the APK around 1.5 MB and makes the build easy to
- * reproduce (and to audit for F-Droid, where every dependency must be free and buildable from source).
+ * Deliberately plain: no AndroidX, no third-party libraries, no code generation, no crash reporting
+ * or analytics (the app has no INTERNET permission, so the usual SDKs are impossible by
+ * construction). Everything is Kotlin on top of the platform SDK, which keeps the APK under 2 MB and
+ * makes the build reproducible - and easy to audit for F-Droid, where every dependency must be free
+ * and buildable from source.
  */
 plugins {
     id("com.android.application")
@@ -85,10 +87,22 @@ android {
 }
 
 dependencies {
-    // The app itself has no dependencies (see the comment at the top). The unit tests need a test
-    // runner only; they are the guard against regressions in the pen pipeline and never ship.
+    /*
+     * Kotlin's standard library, with an explicit version.
+     *
+     * It has to be named: the Kotlin Gradle plugin adds `kotlin-stdlib` (and `kotlin-stdlib-jdk7/8`)
+     * on its own, without version numbers of their own, and F-Droid rejects that with "is not
+     * pinned" - a build must state the exact version of every library it ships. Naming it also
+     * removes the plugin's implicit node, so only one copy of the stdlib is resolved.
+     *
+     * `stdlib-jdk7/8` are left out on purpose: since Kotlin 1.8 their classes live in kotlin-stdlib,
+     * so depending on them only ships the same code twice.
+     */
+    implementation(kotlin("stdlib", "2.0.21"))
+
+    // The unit tests need a runner only; they guard the pen pipeline and never ship.
     testImplementation("junit:junit:4.13.2")
-    testImplementation(kotlin("test"))
+    testImplementation(kotlin("test", "2.0.21"))
 }
 
 tasks.withType<Test>().configureEach {
