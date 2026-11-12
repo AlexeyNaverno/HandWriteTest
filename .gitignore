@@ -7,6 +7,9 @@ local.properties
 !build/dev/*.py
 !build/dev/README.md
 *.apk
+# ...except the release artifacts committed on purpose: the README download links and the GitHub
+# releases point at dist/, and a "raw" link only works for files that are in the repository
+!dist/*.apk
 *.aab
 *.dex
 *.class
